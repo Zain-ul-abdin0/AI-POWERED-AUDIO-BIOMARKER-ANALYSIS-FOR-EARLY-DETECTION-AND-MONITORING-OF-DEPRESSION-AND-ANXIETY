@@ -15,6 +15,7 @@ from sklearn.pipeline import make_pipeline
 from sklearn.impute import SimpleImputer
 from sklearn.decomposition import PCA
 from sklearn.feature_selection import SelectKBest, f_classif
+from joblib import dump,load
 
 # ========================
 # 1. CONFIGURATION
@@ -29,11 +30,13 @@ PHQ8_SCORES = {
     "302": 4,  
     "303": 0,   
     "304": 6,
-    "337": 10,     
-    "332": 18,  
-    "311": 21,   
+    "305": 7,  
+    "306": 0,   
+    "308": 22,
     "309": 15,
-    "308": 22
+    "311": 21,  
+    "332": 18,  
+    "337": 10,     
 }
 
 # ========================
@@ -295,7 +298,9 @@ def train_models(X, y):
         except Exception as e:
             print(f"Error training {name}: {str(e)}")
             continue
-    
+    model_filename = f"{name.replace(' ', '_').lower()}_model.joblib"
+    dump(pipeline, model_filename)
+    print(f"Saved {name} model to {model_filename}")
     return results
 
 # ========================
