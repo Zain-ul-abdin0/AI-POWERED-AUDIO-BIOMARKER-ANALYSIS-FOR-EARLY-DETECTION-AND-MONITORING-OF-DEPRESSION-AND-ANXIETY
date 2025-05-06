@@ -5,72 +5,71 @@ import joblib
 import os
 from sklearn.preprocessing import StandardScaler
 
-# 1. Model Loading with Error Handling
-def load_model_components():
-    """Load model components with validation"""
-    components = {}
+# Define feature order matching training
+FEATURE_ORDER = [
+    'mfcc_0', 'mfcc_1', 'mfcc_2',
+    'chroma_0', 'chroma_1',
+    'spectral_centroid',
+    'spectral_bandwidth',
+    'pitch_mean',
+    'pause_ratio',
+    'speech_rate',
+    'zcr_mean',
+    'rms_energy'
+]
+
+def load_model_pipeline():
+    """Load the complete trained pipeline"""
     try:
-        components['model'] = joblib.load('./svm_model.joblib')
-        print("✔ SVM model loaded successfully")
+        pipeline = joblib.load('./svm_model.joblib')
+        print("✔ Full model pipeline loaded successfully")
+        return pipeline
     except Exception as e:
-        print(f"× Error loading model: {str(e)}")
+        print(f"× Error loading model pipeline: {str(e)}")
         return None
 
-    # Handle scaler (optional but recommended)
-    if os.path.exists('./scaler.joblib'):
-        try:
-            components['scaler'] = joblib.load('./scaler.joblib')
-            print("✔ Scaler loaded successfully")
-        except Exception as e:
-            print(f"× Error loading scaler: {str(e)}")
-            components['scaler'] = None
-    else:
-        print("⚠ No scaler found - proceeding without scaling")
-        components['scaler'] = None
-
-    return components
-
-# 2. Enhanced Feature Extraction (9 features)
 def extract_features(file_path):
-    """Extract exactly 9 features matching training data"""
+    """Corrected feature extraction with validation"""
     try:
-        y, sr = librosa.load(file_path, sr=22050)  # Fixed sample rate
+        y, sr = librosa.load(file_path, sr=22050)
         
-        # Feature calculations
+        # Validate audio isn't silent
+        if np.max(np.abs(y)) < 0.01:
+            print("× Audio is too quiet/silent")
+            return None
+            
+        # Recalculate features with proper methods
         mfcc = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=13)
         chroma = librosa.feature.chroma_stft(y=y, sr=sr)
         
+        # Calculate pauses properly
+        non_silent = librosa.effects.split(y, top_db=30)
+        pause_ratio = sum(end-start for (start,end) in non_silent)/len(y)
+        
         features = {
-            'mfcc_mean': np.mean(mfcc),
-            'mfcc_std': np.std(mfcc),
-            'chroma_mean': np.mean(chroma),
-            'chroma_std': np.std(chroma),
+            'mfcc_0': np.mean(mfcc[0]),
+            'mfcc_1': np.mean(mfcc[1]),
+            'mfcc_2': np.mean(mfcc[2]),
+            'chroma_0': np.mean(chroma[0]),
+            'chroma_1': np.mean(chroma[1]),
             'spectral_centroid': np.mean(librosa.feature.spectral_centroid(y=y, sr=sr)),
             'spectral_bandwidth': np.mean(librosa.feature.spectral_bandwidth(y=y, sr=sr)),
-            'pitch_mean': np.mean(librosa.yin(y, fmin=50, fmax=2000)),
-            'pause_ratio': len(librosa.effects.split(y, top_db=30)) / len(y),
-            'speech_rate': np.count_nonzero(y > 0.1*np.max(y))/len(y)
+            'pitch_mean': np.median(librosa.yin(y, fmin=80, fmax=400)),
+            'pause_ratio': pause_ratio,
+            'speech_rate': len(non_silent)/(len(y)/sr),
+            'zcr_mean': np.mean(librosa.feature.zero_crossing_rate(y)),
+            'rms_energy': np.mean(librosa.feature.rms(y=y))
         }
         
-        # Ensure consistent feature order
-        feature_order = [
-            'mfcc_mean', 'mfcc_std',
-            'chroma_mean', 'chroma_std',
-            'spectral_centroid',
-            'spectral_bandwidth',
-            'pitch_mean',
-            'pause_ratio',
-            'speech_rate'
-        ]
-        return pd.DataFrame([features])[feature_order]
-    
+        # Convert to DataFrame with correct column order
+        return pd.DataFrame([features])[FEATURE_ORDER]
+        
     except Exception as e:
         print(f"Feature extraction failed: {str(e)}")
         return None
 
-# 3. Robust Prediction Function
-def predict_audio(file_path, components):
-    """Make prediction with error handling"""
+def predict_audio(file_path, pipeline):
+    """Make prediction using full pipeline"""
     if not os.path.exists(file_path):
         print(f"× File not found: {file_path}")
         return "Error: File not found", 0.0
@@ -80,13 +79,12 @@ def predict_audio(file_path, components):
         return "Error: Feature extraction failed", 0.0
     
     try:
-        # Scale if scaler exists
-        if components['scaler'] is not None:
-            features = components['scaler'].transform(features)
+        # Convert to numpy array to avoid feature name warnings
+        features_array = features.values
         
-        # Predict
-        pred = components['model'].predict(features)
-        proba = components['model'].predict_proba(features)
+        # Make prediction
+        pred = pipeline.predict(features_array)
+        proba = pipeline.predict_proba(features_array)
         
         label = "Depressed" if pred[0] == 1 else "Not Depressed"
         confidence = proba[0][pred[0]] * 100
@@ -96,17 +94,13 @@ def predict_audio(file_path, components):
         print(f"Prediction failed: {str(e)}")
         return "Error: Prediction failed", 0.0
 
-# 4. Main Execution
 if __name__ == "__main__":
-    # Load components
-    model_components = load_model_components()
-    if model_components is None:
-        print("Critical error - cannot proceed")
+    pipeline = load_model_pipeline()
+    if pipeline is None:
         exit()
     
-    # Example prediction
-    audio_file = "./Dataset/307_AUDIO.wav"  # Replace with your file
-    label, confidence = predict_audio(audio_file, model_components)
+    audio_file = "./Test/491_AUDIO.wav"
+    label, confidence = predict_audio(audio_file, pipeline)
     
     print("\n" + "="*50)
     print(f"  Result: {label} ({confidence}% confidence)")

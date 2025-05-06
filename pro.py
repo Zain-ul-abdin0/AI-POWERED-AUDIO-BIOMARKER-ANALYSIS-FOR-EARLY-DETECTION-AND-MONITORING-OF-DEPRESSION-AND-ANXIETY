@@ -32,6 +32,7 @@ PHQ8_SCORES = {
     "304": 6,
     "305": 7,  
     "306": 0,   
+    "307": 4,   
     "308": 22,
     "309": 15,
     "311": 21,  
@@ -254,8 +255,9 @@ def train_models(X, y):
         
         # Create pipeline
         pipeline = make_pipeline(
-            StandardScaler(),
-            model
+        StandardScaler(),
+        SelectKBest(f_classif, k=12),  # Keep same features as prediction will use
+        SVC(kernel='rbf', probability=True, random_state=42)
         )
         
         try:
