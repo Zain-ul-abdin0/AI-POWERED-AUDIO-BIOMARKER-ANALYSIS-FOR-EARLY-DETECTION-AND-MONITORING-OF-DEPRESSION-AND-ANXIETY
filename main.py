@@ -499,6 +499,7 @@ from sklearn.calibration import CalibratedClassifierCV
 from sklearn.utils.class_weight import compute_class_weight
 from joblib import dump, load
 import lightgbm as lgb # Changed from xgboost
+import xgboost as xgb
 from sklearn.ensemble import VotingClassifier
 
 # ========================
@@ -766,6 +767,18 @@ def train_models(X, y, feature_names):
             metric='logloss',   # Evaluation metric
             is_unbalance=True,  # Handles class imbalance (alternative to scale_pos_weight)
             # scale_pos_weight=sum(y_train==0)/sum(y_train==1), # Alternative for imbalance
+            n_estimators=200,
+            max_depth=6,
+            learning_rate=0.05,
+            subsample=0.8,
+            colsample_bytree=0.8,
+            random_state=42
+        ),
+        "XGBoost": xgb.XGBClassifier(
+            objective='binary:logistic',
+            eval_metric='logloss',
+            use_label_encoder=False,
+            scale_pos_weight=sum(y_train==0)/sum(y_train==1),
             n_estimators=200,
             max_depth=6,
             learning_rate=0.05,
