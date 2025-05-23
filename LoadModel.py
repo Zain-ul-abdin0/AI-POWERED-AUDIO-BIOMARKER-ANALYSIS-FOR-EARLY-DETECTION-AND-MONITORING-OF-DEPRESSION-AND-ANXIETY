@@ -58,7 +58,7 @@ def extract_features(file_path):
             'pause_ratio': pause_ratio,
             'speech_rate': len(non_silent)/(len(y)/sr),
             'zcr_mean': np.mean(librosa.feature.zero_crossing_rate(y)),
-            'rms_energy': np.mean(librosa.feature.rms(y=y))
+            'rms_energy': np.mean(librosa.feature.rms(y=y)) 
         }
         
         # Convert to DataFrame with correct column order
