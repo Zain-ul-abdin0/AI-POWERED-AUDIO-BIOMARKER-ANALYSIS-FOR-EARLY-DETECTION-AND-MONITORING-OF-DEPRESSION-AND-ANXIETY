@@ -452,7 +452,7 @@ if __name__ == "__main__":
     if pipeline is None:
         exit()
     
-    audio_file = "./Test/491_AUDIO.wav"
+    audio_file = "./Test/309_AUDIO.wav"
     label, confidence = predict_audio(audio_file, pipeline)
     
     print("\n" + "="*50)
