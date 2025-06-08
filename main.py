@@ -511,7 +511,7 @@ DATASET_PATH = "Dataset"
 OUTPUT_CSV = "all_features.csv"
 MODEL_SAVE_PATH = "trained_models"
 
-# Add PHQ-8 scores here (format: "participant_id": score)
+# data balance  Add PHQ-8 scores here (format: "participant_id": score)
 PHQ8_SCORES = {
 "302": 4,     "307": 4,     "331": 8,     "335": 12,     "346": 23,
 "367": 19,     "377": 16,     "381": 16,     "382": 0,     "388": 17,

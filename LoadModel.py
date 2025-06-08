@@ -262,8 +262,8 @@ def load_model_pipeline():
         # Load the corresponding feature names.
         # If loading 'ensemble_model.joblib', it's best to use 'overall_selected_features.joblib'
         # as the ensemble itself doesn't have a single set of feature names.
-        if model_to_load == 'ensemble_model.joblib':
-            feature_names_file = './trained_models/overall_selected_features.joblib'
+        if model_to_load == 'lightgbm_model.joblib':
+            feature_names_file = './trained_models/lightgbm_features.joblib'
         else:
             feature_names_file = os.path.join('./trained_models', model_to_load.replace('_model.joblib', '_features.joblib'))
             
