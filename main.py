@@ -306,29 +306,23 @@ def prepare_features(features_df):
 # 6. MODEL TRAINING (ENHANCED)
 # ========================
 def train_models(X, y, feature_names):
+    from sklearn.model_selection import StratifiedKFold, GridSearchCV, train_test_split
+    from sklearn.calibration import CalibratedClassifierCV
+    from sklearn.pipeline import make_pipeline
+
     if y is None:
-        print("No labels available for training")
+        print("No labels available for training.")
         return None
-    
-    # Check class distribution
-    class_counts = pd.Series(y).value_counts()
-    print("\nClass distribution:")
-    print(class_counts)
-    
-    if len(class_counts) < 2:
-        print("\nWarning: Only one class present in data. Cannot train meaningful model.")
-        return None
-    
-    # Split data with stratification
+
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.2, random_state=42, stratify=y
     )
-    
-    # Calculate class weights
+
     class_weights = compute_class_weight('balanced', classes=np.unique(y_train), y=y_train)
     class_weight_dict = dict(zip(np.unique(y_train), class_weights))
-    
-    # Define models with balanced class weights
+
+    results = {}
+
     models = {
         "Random Forest": RandomForestClassifier(
             n_estimators=300,
@@ -339,37 +333,17 @@ def train_models(X, y, feature_names):
         ),
         "SVM": make_pipeline(
             StandardScaler(),
-            # Remove inner SelectKBest as we already did feature selection
             CalibratedClassifierCV(
-                SVC(
-                    kernel='rbf',
-                    class_weight='balanced',  # Explicit balanced weights
-                    probability=True,
-                    gamma='auto',  # Try 'auto' instead of 'scale'
-                    C=0.1,  # Try smaller C value
-                    random_state=42
-                ),
-                method='sigmoid',  # Try sigmoid calibration
+                SVC(kernel='rbf', class_weight='balanced', probability=True, gamma='auto', C=0.1, random_state=42),
+                method='sigmoid',
                 cv=3
             )
-        ),
-        "LightGBM": lgb.LGBMClassifier( # Changed from XGBoost
-            objective='binary', # For binary classification
-            metric='logloss',   # Evaluation metric
-            is_unbalance=True,  # Handles class imbalance (alternative to scale_pos_weight)
-            # scale_pos_weight=sum(y_train==0)/sum(y_train==1), # Alternative for imbalance
-            n_estimators=200,
-            max_depth=6,
-            learning_rate=0.05,
-            subsample=0.8,
-            colsample_bytree=0.8,
-            random_state=42
         ),
         "XGBoost": xgb.XGBClassifier(
             objective='binary:logistic',
             eval_metric='logloss',
             use_label_encoder=False,
-            scale_pos_weight=sum(y_train==0)/sum(y_train==1),
+            scale_pos_weight=sum(y_train == 0) / sum(y_train == 1),
             n_estimators=200,
             max_depth=6,
             learning_rate=0.05,
@@ -378,70 +352,135 @@ def train_models(X, y, feature_names):
             random_state=42
         )
     }
-    
-    # Train and evaluate each model
-    results = {}
+
     for name, model in models.items():
-        print(f"\nTraining {name}...")
-        
+        print(f"\nTraining {name} …")
         try:
-            # Train model with cross-validation
-            cv_scores = cross_val_score(model, X_train, y_train, cv=5, scoring='roc_auc')
-            print(f"Cross-validation ROC AUC: {np.mean(cv_scores):.2f} ± {np.std(cv_scores):.2f}")
-            
+            cv_scores = cross_val_score(model, X_train, y_train, cv=5, scoring="roc_auc")
+            print(f"CV ROC‑AUC: {np.mean(cv_scores):.2f} ± {np.std(cv_scores):.2f}")
             model.fit(X_train, y_train)
-            
-            # Evaluate
+
             y_pred = model.predict(X_test)
-            y_proba = model.predict_proba(X_test)[:, 1] if hasattr(model, 'predict_proba') else [0]*len(X_test)
-            
-            # Store results
+            y_proba = model.predict_proba(X_test)[:, 1] if hasattr(model, 'predict_proba') else [0] * len(y_test)
+
             results[name] = {
                 "model": model,
                 "accuracy": accuracy_score(y_test, y_pred),
-                "roc_auc": roc_auc_score(y_test, y_proba) if len(np.unique(y_test)) > 1 else float('nan'),
-                "avg_precision": average_precision_score(y_test, y_proba) if len(np.unique(y_test)) > 1 else float('nan'),
+                "roc_auc": roc_auc_score(y_test, y_proba),
+                "avg_precision": average_precision_score(y_test, y_proba),
                 "report": classification_report(y_test, y_pred),
                 "confusion_matrix": confusion_matrix(y_test, y_pred),
-                "feature_importances": get_feature_importances(model, feature_names) if hasattr(model, 'feature_importances_') else None
+                "feature_importances": get_feature_importances(model, feature_names)
+                    if hasattr(model, "feature_importances_") else None
             }
-            
-            # Print results
+
             print(f"\n{name} Results:")
             print(f"Accuracy: {results[name]['accuracy']:.2f}")
             print(f"ROC AUC: {results[name]['roc_auc']:.2f}")
             print("Classification Report:")
             print(results[name]['report'])
-            
-            # Plot confusion matrix
+
+            # Confusion matrix plot
             plt.figure()
-            sns.heatmap(results[name]['confusion_matrix'], 
+            sns.heatmap(results[name]['confusion_matrix'],
                         annot=True, fmt='d', cmap='Blues',
                         xticklabels=['Not Depressed', 'Depressed'],
                         yticklabels=['Not Depressed', 'Depressed'])
             plt.title(f"{name} Confusion Matrix")
             plt.xlabel('Predicted')
             plt.ylabel('Actual')
+            plt.tight_layout()
+            plt.savefig(f"{name.lower().replace(' ', '_')}_confusion_matrix.png")
             plt.show()
-            
-            # Save the trained model and its specific feature names
-            model_filename = os.path.join(MODEL_SAVE_PATH, f"{name.lower().replace(' ', '_')}_model.joblib")
-            feature_names_filename = os.path.join(MODEL_SAVE_PATH, f"{name.lower().replace(' ', '_')}_features.joblib")
 
-            try:
-                dump(model, model_filename)
-                dump(feature_names.tolist(), feature_names_filename) # Save feature names specific to this model's input
-                print(f"✅ Saved {name} model to {model_filename}")
-                print(f"✅ Saved {name} feature names to {feature_names_filename}")
-            except Exception as e:
-                print(f"❌ Failed to save {name} model or feature names: {e}")
-                continue
-            
         except Exception as e:
-            print(f"Error training {name}: {str(e)}")
+            print(f"⚠️ Error training {name}: {str(e)}")
             continue
-    
-    # Create and save an ensemble model if we have multiple successful models
+
+    # LIGHTGBM BLOCK (already optimized for small data)
+    print("\nTuning LightGBM (small‑data friendly)…")
+    scale_pos_weight = sum(y_train == 0) / sum(y_train == 1)
+
+    base_lgb_params = dict(
+        objective="binary",
+        metric="auc",
+        boosting_type="gbdt",
+        feature_pre_filter=False,
+        min_data_in_leaf=max(1, int(0.05 * len(y_train))),
+        min_data_in_bin=1,
+        scale_pos_weight=scale_pos_weight,
+        n_jobs=-1,
+        random_state=42,
+    )
+
+    lgb_model = lgb.LGBMClassifier(**base_lgb_params)
+
+    if len(y_train) >= 60:
+        param_grid = {
+            "n_estimators": [100, 200],
+            "learning_rate": [0.01, 0.05, 0.1],
+            "max_depth": [-1, 4, 6],
+            "num_leaves": [7, 15, 31],
+            "subsample": [0.8, 1.0],
+            "colsample_bytree": [0.8, 1.0],
+            "reg_alpha": [0.0, 0.1],
+            "reg_lambda": [0.0, 1.0],
+        }
+
+        cv = StratifiedKFold(n_splits=3, shuffle=True, random_state=42)
+        grid = GridSearchCV(lgb_model, param_grid, cv=cv, scoring='roc_auc', verbose=1, n_jobs=-1)
+        grid.fit(X_train, y_train)
+        best_lgb_model = grid.best_estimator_
+    else:
+        best_lgb_model = lgb_model.set_params(
+            n_estimators=200,
+            learning_rate=0.05,
+            max_depth=-1,
+            num_leaves=31,
+            subsample=0.8,
+            colsample_bytree=0.8,
+            reg_alpha=0.1,
+            reg_lambda=1.0,
+        ).fit(X_train, y_train)
+
+    if len(y_train) >= 90:
+        calibrated_lgb = CalibratedClassifierCV(best_lgb_model, method='isotonic', cv=3)
+        calibrated_lgb.fit(X_train, y_train)
+    else:
+        calibrated_lgb = best_lgb_model
+
+    y_pred = calibrated_lgb.predict(X_test)
+    y_proba = calibrated_lgb.predict_proba(X_test)[:, 1]
+
+    results["LightGBM_Improved"] = {
+        "model": calibrated_lgb,
+        "accuracy": accuracy_score(y_test, y_pred),
+        "roc_auc": roc_auc_score(y_test, y_proba),
+        "avg_precision": average_precision_score(y_test, y_proba),
+        "report": classification_report(y_test, y_pred),
+        "confusion_matrix": confusion_matrix(y_test, y_pred),
+        "feature_importances": get_feature_importances(best_lgb_model, feature_names),
+    }
+
+    print("\n✅ LightGBM (Improved) Results:")
+    print(f"Accuracy: {results['LightGBM_Improved']['accuracy']:.2f}")
+    print(f"ROC AUC: {results['LightGBM_Improved']['roc_auc']:.2f}")
+    print("Classification Report:")
+    print(results['LightGBM_Improved']['report'])
+
+    plt.figure()
+    sns.heatmap(results["LightGBM_Improved"]["confusion_matrix"],
+                annot=True, fmt='d', cmap='Blues',
+                xticklabels=['Not Depressed', 'Depressed'],
+                yticklabels=['Not Depressed', 'Depressed'])
+    plt.title("LightGBM (Tuned) Confusion Matrix")
+    plt.xlabel('Predicted')
+    plt.ylabel('Actual')
+    plt.tight_layout()
+    plt.savefig("lightgbm_improved_confusion_matrix.png")
+    plt.show()
+
+    # OPTIONAL: Ensemble
     successful_models = [(name, res['model']) for name, res in results.items() if 'model' in res]
     if len(successful_models) > 1:
         ensemble = VotingClassifier(
@@ -451,25 +490,23 @@ def train_models(X, y, feature_names):
         )
         ensemble.fit(X_train, y_train)
         ensemble_filename = os.path.join(MODEL_SAVE_PATH, "ensemble_model.joblib")
-        try:
-            dump(ensemble, ensemble_filename)
-            print(f"✅ Saved ensemble model to {ensemble_filename}")
-            results['Ensemble'] = {
-                "model": ensemble,
-                "accuracy": accuracy_score(y_test, ensemble.predict(X_test))
-            }
-        except Exception as e:
-            print(f"❌ Failed to save ensemble model: {e}")
-    
-    # Save the overall selected feature names (from prepare_features) once
+        dump(ensemble, ensemble_filename)
+        print(f"✅ Saved ensemble model to {ensemble_filename}")
+        results['Ensemble'] = {
+            "model": ensemble,
+            "accuracy": accuracy_score(y_test, ensemble.predict(X_test))
+        }
+
+    # Save overall selected features
     overall_selected_features_filename = os.path.join(MODEL_SAVE_PATH, "overall_selected_features.joblib")
     try:
         dump(feature_names.tolist(), overall_selected_features_filename)
         print(f"✅ Saved overall selected feature names to {overall_selected_features_filename}")
     except Exception as e:
         print(f"❌ Failed to save overall selected feature names: {e}")
-    
+
     return results
+
 
 def get_feature_importances(model, feature_names):
     """Extract feature importances in a readable format"""
