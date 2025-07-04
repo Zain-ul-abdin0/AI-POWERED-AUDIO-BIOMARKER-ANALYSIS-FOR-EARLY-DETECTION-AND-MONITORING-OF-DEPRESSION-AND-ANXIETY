@@ -1,0 +1,104 @@
+DEPRESSION DETECTION FROM AUDIO FEATURES
+Technical Documentation
+
+1. System Overview
+--------------------------------------------------
+A machine learning system that analyzes vocal characteristics to detect signs of depression using:
+- Acoustic features (MFCCs, pitch, jitter)
+- Prosodic features (speaking rate, pauses)
+- Linguistic features (from transcripts)
+Trained on PHQ-8 depression screening scores.
+
+2. Architecture Diagram
+[Insert system flowchart here showing:
+Audio Input → Feature Extraction → Model Prediction → Output]
+
+3. Key Components
+--------------------------------------------------
+3.1 Data Preparation (main.py)
+• Audio Processing:
+  - Standardizes to 16kHz, 5-second clips
+  - Removes silence (>25dB threshold)
+  - Normalizes amplitude
+
+• Feature Extraction:
+  - 40 MFCC coefficients
+  - 12 Chroma features  
+  - Pitch statistics
+  - Voice activity metrics
+  - (Optional) Transcript analysis
+
+3.2 Machine Learning Pipeline
+• Feature Selection:
+  - SelectKBest (top 30 features)
+  - ANOVA F-value scoring
+
+• Model Training:
+  - Random Forest (300 trees)
+  - SVM with RBF kernel  
+  - XGBoost (200 trees)
+  - LightGBM (optimized for small data)
+
+4. Model Deployment (LoadModel.py)
+--------------------------------------------------
+Prediction Workflow:
+1. Load trained model
+2. Process new audio file
+3. Extract identical features used in training  
+4. Generate prediction with confidence score
+
+Supported Models:
+- SVM (default)
+- Random Forest
+- XGBoost  
+- LightGBM
+- Ensemble
+
+5. Technical Specifications
+--------------------------------------------------
+• Input Requirements:
+  - WAV audio format
+  - Minimum 0.5s usable speech
+  - (Optional) Transcript CSV for linguistic features
+
+• Output:
+  - Binary classification (Depressed/Not Depressed)
+  - Confidence percentage
+  - Feature importance scores
+
+• Performance Metrics:
+  - Accuracy
+  - ROC AUC  
+  - Precision-Recall
+
+6. Usage Examples
+--------------------------------------------------
+6.1 Training New Models:
+features = process_all_files()  
+X, y = prepare_features(features)
+results = train_models(X, y)
+
+6.2 Making Predictions:  
+model = load_model_pipeline()
+label, confidence = predict_audio("test.wav", model)
+
+7. Validation Results
+--------------------------------------------------
+[Insert your confusion matrices and metrics tables here]
+
+8. Maintenance Guide
+--------------------------------------------------
+• Required Packages:
+  - librosa, sklearn, lightgbm, xgboost
+  - Python ≥3.8
+
+• Retraining:
+  - Add new audio files to /Dataset
+  - Update PHQ8_SCORES dictionary
+  - Run main.py
+
+9. Limitations
+--------------------------------------------------
+• Small dataset sensitivity
+• Requires clean audio input  
+• Transcript processing optional
