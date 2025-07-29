@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Depression Detection</title>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; }
+        .result { margin-top: 20px; padding: 15px; border-radius: 5px; }
+        .high-risk { background-color: #ffdddd; border-left: 5px solid #f44336; }
+        .medium-risk { background-color: #fff3cd; border-left: 5px solid #ffc107; }
+        .low-risk { background-color: #ddffdd; border-left: 5px solid #4CAF50; }
+    </style>
+</head>
+<body>
+    <h1>Audio Depression Detection</h1>
+    <form id="uploadForm">
+        <input type="file" name="file" accept=".wav,.mp3" required>
+        <button type="submit">Analyze</button>
+    </form>
+    
+    <div id="result" class="result" style="display:none;">
+        <h3>Result</h3>
+        <p><strong>Status:</strong> <span id="prediction"></span></p>
+        <p><strong>Confidence:</strong> <span id="confidence"></span></p>
+        <p><strong>Risk Level:</strong> <span id="risk"></span></p>
+    </div>
+
+    <script>
+        document.getElementById('uploadForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const formData = new FormData();
+            formData.append('file', e.target.file.files[0]);
+            
+            const response = await fetch('/predict', {
+                method: 'POST',
+                body: formData
+            });
+            
+            const result = await response.json();
+            const resultDiv = document.getElementById('result');
+            
+            if (result.error) {
+                resultDiv.innerHTML = `<p style="color:red">Error: ${result.error}</p>`;
+                resultDiv.style.display = 'block';
+                return;
+            }
+            
+            document.getElementById('prediction').textContent = result.prediction;
+            document.getElementById('confidence').textContent = `${(result.confidence * 100).toFixed(1)}%`;
+            document.getElementById('risk').textContent = result.risk_level;
+            
+            // Set risk level styling
+            resultDiv.className = 'result ' + 
+                (result.risk_level.toLowerCase().replace(' ', '-')) + '-risk';
+            resultDiv.style.display = 'block';
+        });
+    </script>
+</body>
+</html>
