@@ -6,72 +6,24 @@ import os
 from sklearn.preprocessing import StandardScaler
 # from textblob import TextBlob # Uncomment if your SELECTED_FEATURES include linguistic features and you have transcripts
 import lightgbm as lgb # Added for LightGBM model loading
-import pyaudio
-import wave
-from collections import deque
+
 # This will be loaded dynamically from the saved feature names file
 LOADED_FEATURE_NAMES = []
 
-class AudioStreamer:
-    """Real-time audio processing"""
-    def __init__(self, model, sr=16000, chunk_size=1024):
-        self.model = model
-        self.sr = sr
-        self.chunk_size = chunk_size
-        self.audio_buffer = deque(maxlen=sr*5)  # 5-second buffer
-        
-    def start_stream(self):
-        self.p = pyaudio.PyAudio()
-        self.stream = self.p.open(
-            format=pyaudio.paInt16,
-            channels=1,
-            rate=self.sr,
-            input=True,
-            frames_per_buffer=self.chunk_size,
-            stream_callback=self.process_chunk
-        )
-        
-    def process_chunk(self, in_data, frame_count, time_info, status):
-        audio = np.frombuffer(in_data, dtype=np.int16)
-        self.audio_buffer.extend(audio)
-        
-        if len(self.audio_buffer) >= self.sr*5:  # Process every 5 seconds
-            full_audio = np.array(self.audio_buffer)
-            features = extract_features_from_buffer(full_audio, self.sr)
-            prediction = self.model.predict([features])[0]
-            print(f"Current prediction: {'Depressed' if prediction == 1 else 'Not Depressed'}")
-            
-        return (in_data, pyaudio.paContinue)
-    
-    def stop_stream(self):
-        self.stream.stop_stream()
-        self.stream.close()
-        self.p.terminate()
-
-def extract_features_from_buffer(audio, sr):
-    """Adapt your extract_features for real-time"""
-    features = {}
-    
-    # Example: Just extract key features for speed
-    mfccs = librosa.feature.mfcc(y=audio, sr=sr, n_mfcc=13)
-    features.update({f"mfcc_{i}_mean": np.mean(mfccs[i]) for i in range(13)})
-    
-    # Add other time-efficient features...
-    return features
 def load_model_pipeline():
     """Load the complete trained pipeline and its associated feature names"""
     try:
         # Change this path to load the specific model you want to test:
         # e.g., 'svm_model.joblib', 'random_forest_model.joblib', 'lightgbm_model.joblib', or 'ensemble_model.joblib'
-        model_to_load = 'random_forest_model.joblib' 
+        model_to_load = 'xgboost_model.joblib' 
         pipeline = joblib.load(os.path.join('./trained_models', model_to_load))
         print(f"✔ Full model pipeline '{model_to_load}' loaded successfully")
         
         # Load the corresponding feature names.
         # If loading 'ensemble_model.joblib', it's best to use 'overall_selected_features.joblib'
         # as the ensemble itself doesn't have a single set of feature names.
-        if model_to_load == 'xgboost_model.joblib':
-            feature_names_file = './trained_models/svm_features.joblib'
+        if model_to_load == 'ensemble_model.joblib':
+            feature_names_file = './trained_models/overall_selected_features.joblib'
         else:
             feature_names_file = os.path.join('./trained_models', model_to_load.replace('_model.joblib', '_features.joblib'))
             
@@ -260,7 +212,7 @@ if __name__ == "__main__":
     if pipeline is None:
         exit()
     
-    audio_file = "./Test/308_AUDIO.wav"
+    audio_file = "./Dataset/303_AUDIO.wav"
     label, confidence = predict_audio(audio_file, pipeline)
     
     print("\n" + "="*50)
