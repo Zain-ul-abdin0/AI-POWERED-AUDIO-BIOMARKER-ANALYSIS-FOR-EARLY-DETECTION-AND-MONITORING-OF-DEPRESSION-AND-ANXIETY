@@ -15,7 +15,7 @@ def load_model_pipeline():
     try:
         # Change this path to load the specific model you want to test:
         # e.g., 'svm_model.joblib', 'random_forest_model.joblib', 'lightgbm_model.joblib', or 'ensemble_model.joblib'
-        model_to_load = 'xgboost_model.joblib' 
+        model_to_load = 'lightgbm_model.joblib' 
         pipeline = joblib.load(os.path.join('./trained_models', model_to_load))
         print(f"✔ Full model pipeline '{model_to_load}' loaded successfully")
         
@@ -24,6 +24,8 @@ def load_model_pipeline():
         # as the ensemble itself doesn't have a single set of feature names.
         if model_to_load == 'ensemble_model.joblib':
             feature_names_file = './trained_models/overall_selected_features.joblib'
+        if model_to_load == 'svm_model.joblib':
+            feature_names_file = './trained_models/selected_features.joblib'
         else:
             feature_names_file = os.path.join('./trained_models', model_to_load.replace('_model.joblib', '_features.joblib'))
             
@@ -212,7 +214,7 @@ if __name__ == "__main__":
     if pipeline is None:
         exit()
     
-    audio_file = "./Dataset/303_AUDIO.wav"
+    audio_file = "./Dataset/491_AUDIO.wav"
     label, confidence = predict_audio(audio_file, pipeline)
     
     print("\n" + "="*50)

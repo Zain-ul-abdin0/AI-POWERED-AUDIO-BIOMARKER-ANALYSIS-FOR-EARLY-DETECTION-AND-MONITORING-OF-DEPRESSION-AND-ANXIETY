@@ -450,6 +450,7 @@ def train_models(X, y, feature_names):
     from sklearn.model_selection import StratifiedKFold, GridSearchCV, train_test_split
     from sklearn.calibration import CalibratedClassifierCV
     from sklearn.pipeline import make_pipeline
+    import pandas as pd
 
     if y is None:
         print("No labels available for training.")
@@ -467,14 +468,14 @@ def train_models(X, y, feature_names):
     results = {}
 
     models = {
-        "Random Forest": RandomForestClassifier(
+        "random_forest": RandomForestClassifier(
             n_estimators=300,
             class_weight=class_weight_dict,
             max_depth=10,
             min_samples_split=5,
             random_state=42,
         ),
-        "SVM": make_pipeline(
+        "svm": make_pipeline(
             StandardScaler(),
             CalibratedClassifierCV(
                 SVC(
@@ -489,7 +490,7 @@ def train_models(X, y, feature_names):
                 cv=3,
             ),
         ),
-        "XGBoost": xgb.XGBClassifier(
+        "xgboost": xgb.XGBClassifier(
             objective="binary:logistic",
             eval_metric="logloss",
             use_label_encoder=False,
@@ -503,68 +504,63 @@ def train_models(X, y, feature_names):
         ),
     }
 
+    # Train and save each model with features
     for name, model in models.items():
-        print(f"\nTraining {name} …")
+        print(f"\nTraining {name} ...")
         try:
-            cv_scores = cross_val_score(
-                model, X_train, y_train, cv=5, scoring="roc_auc"
-            )
-            print(f"CV ROC‑AUC: {np.mean(cv_scores):.2f} ± {np.std(cv_scores):.2f}")
+            # Cross-validation
+            cv_scores = cross_val_score(model, X_train, y_train, cv=5, scoring="roc_auc")
+            print(f"CV ROC-AUC: {np.mean(cv_scores):.2f} ± {np.std(cv_scores):.2f}")
+            
+            # Fit model
             model.fit(X_train, y_train)
+            
+            # Save the model
+            model_filename = f"{name}_model.joblib"
+            model_path = os.path.join(MODEL_SAVE_PATH, model_filename)
+            dump(model, model_path)
+            print(f"✅ Saved {name} model to {model_path}")
 
+            # Get feature importances
+            feature_imp = get_feature_importances(model, feature_names)
+            
+            # Save feature importances with specific naming
+            if feature_imp is not None:
+                if name == "svm":
+                    features_filename = "svm_features.joblib"
+                else:
+                    features_filename = f"{name}_features.joblib"
+                
+                features_path = os.path.join(MODEL_SAVE_PATH, features_filename)
+                dump(feature_imp, features_path)
+                print(f"✅ Saved {name} features to {features_path}")
+
+            # Evaluate model
             y_pred = model.predict(X_test)
-            y_proba = (
-                model.predict_proba(X_test)[:, 1]
-                if hasattr(model, "predict_proba")
-                else [0] * len(y_test)
-            )
+            y_proba = model.predict_proba(X_test)[:, 1] if hasattr(model, "predict_proba") else None
 
             results[name] = {
                 "model": model,
                 "accuracy": accuracy_score(y_test, y_pred),
-                "roc_auc": roc_auc_score(y_test, y_proba),
-                "avg_precision": average_precision_score(y_test, y_proba),
-                "report": classification_report(y_test, y_pred),
+                "roc_auc": roc_auc_score(y_test, y_proba) if y_proba is not None else None,
+                "avg_precision": average_precision_score(y_test, y_proba) if y_proba is not None else None,
+                "report": classification_report(y_test, y_pred, output_dict=True),
                 "confusion_matrix": confusion_matrix(y_test, y_pred),
-                "feature_importances": (
-                    get_feature_importances(model, feature_names)
-                    if hasattr(model, "feature_importances_")
-                    else None
-                ),
+                "feature_importances": feature_imp,
             }
 
-            print(f"\n{name} Results:")
-            print(f"Accuracy: {results[name]['accuracy']:.2f}")
-            print(f"ROC AUC: {results[name]['roc_auc']:.2f}")
-            print("Classification Report:")
-            print(results[name]["report"])
-
-            # Confusion matrix plot
-            plt.figure()
-            sns.heatmap(
-                results[name]["confusion_matrix"],
-                annot=True,
-                fmt="d",
-                cmap="Blues",
-                xticklabels=["Not Depressed", "Depressed"],
-                yticklabels=["Not Depressed", "Depressed"],
-            )
-            plt.title(f"{name} Confusion Matrix")
-            plt.xlabel("Predicted")
-            plt.ylabel("Actual")
-            plt.tight_layout()
-            plt.savefig(f"{name.lower().replace(' ', '_')}_confusion_matrix.png")
-            plt.show()
+            # Plot and save confusion matrix
+            plot_confusion_matrix(results[name]["confusion_matrix"], f"{name} Confusion Matrix")
 
         except Exception as e:
             print(f"⚠️ Error training {name}: {str(e)}")
             continue
 
-    # LIGHTGBM BLOCK (already optimized for small data)
-    print("\nTuning LightGBM (small‑data friendly)…")
+    # Train and save LightGBM model with features
+    print("\nTraining LightGBM...")
     scale_pos_weight = sum(y_train == 0) / sum(y_train == 1)
 
-    base_lgb_params = dict(
+    lgb_model = lgb.LGBMClassifier(
         objective="binary",
         metric="auc",
         boosting_type="gbdt",
@@ -576,8 +572,7 @@ def train_models(X, y, feature_names):
         random_state=42,
     )
 
-    lgb_model = lgb.LGBMClassifier(**base_lgb_params)
-
+    # Hyperparameter tuning
     if len(y_train) >= 60:
         param_grid = {
             "n_estimators": [100, 200],
@@ -589,11 +584,7 @@ def train_models(X, y, feature_names):
             "reg_alpha": [0.0, 0.1],
             "reg_lambda": [0.0, 1.0],
         }
-
-        cv = StratifiedKFold(n_splits=3, shuffle=True, random_state=42)
-        grid = GridSearchCV(
-            lgb_model, param_grid, cv=cv, scoring="roc_auc", verbose=1, n_jobs=-1
-        )
+        grid = GridSearchCV(lgb_model, param_grid, cv=3, scoring="roc_auc", n_jobs=-1)
         grid.fit(X_train, y_train)
         best_lgb_model = grid.best_estimator_
     else:
@@ -608,77 +599,98 @@ def train_models(X, y, feature_names):
             reg_lambda=1.0,
         ).fit(X_train, y_train)
 
-    if len(y_train) >= 90:
-        calibrated_lgb = CalibratedClassifierCV(best_lgb_model, method="isotonic", cv=3)
-        calibrated_lgb.fit(X_train, y_train)
-    else:
-        calibrated_lgb = best_lgb_model
+    # Calibration
+    calibrated_lgb = CalibratedClassifierCV(best_lgb_model, method="isotonic", cv=3) if len(y_train) >= 90 else best_lgb_model
+    calibrated_lgb.fit(X_train, y_train)
+    
+    # Save LightGBM model
+    lgb_model_path = os.path.join(MODEL_SAVE_PATH, "lightgbm_model.joblib")
+    dump(calibrated_lgb, lgb_model_path)
+    print(f"✅ Saved LightGBM model to {lgb_model_path}")
 
+    # Get and save LightGBM features
+    lgb_feature_imp = get_feature_importances(best_lgb_model, feature_names)
+    if lgb_feature_imp is not None:
+        lgb_features_path = os.path.join(MODEL_SAVE_PATH, "lightgbm_features.joblib")
+        dump(lgb_feature_imp, lgb_features_path)
+        print(f"✅ Saved LightGBM features to {lgb_features_path}")
+
+    # Evaluate LightGBM
     y_pred = calibrated_lgb.predict(X_test)
     y_proba = calibrated_lgb.predict_proba(X_test)[:, 1]
 
-    results["LightGBM_Improved"] = {
+    results["lightgbm"] = {
         "model": calibrated_lgb,
         "accuracy": accuracy_score(y_test, y_pred),
         "roc_auc": roc_auc_score(y_test, y_proba),
         "avg_precision": average_precision_score(y_test, y_proba),
-        "report": classification_report(y_test, y_pred),
+        "report": classification_report(y_test, y_pred, output_dict=True),
         "confusion_matrix": confusion_matrix(y_test, y_pred),
-        "feature_importances": get_feature_importances(best_lgb_model, feature_names),
+        "feature_importances": lgb_feature_imp,
     }
 
-    print("\n✅ LightGBM (Improved) Results:")
-    print(f"Accuracy: {results['LightGBM_Improved']['accuracy']:.2f}")
-    print(f"ROC AUC: {results['LightGBM_Improved']['roc_auc']:.2f}")
-    print("Classification Report:")
-    print(results["LightGBM_Improved"]["report"])
+    # Plot and save LightGBM confusion matrix
+    plot_confusion_matrix(results["lightgbm"]["confusion_matrix"], "LightGBM Confusion Matrix")
 
-    plt.figure()
-    sns.heatmap(
-        results["LightGBM_Improved"]["confusion_matrix"],
-        annot=True,
-        fmt="d",
-        cmap="Blues",
-        xticklabels=["Not Depressed", "Depressed"],
-        yticklabels=["Not Depressed", "Depressed"],
-    )
-    plt.title("LightGBM (Tuned) Confusion Matrix")
-    plt.xlabel("Predicted")
-    plt.ylabel("Actual")
-    plt.tight_layout()
-    plt.savefig("lightgbm_improved_confusion_matrix.png")
-    plt.show()
-
-    # OPTIONAL: Ensemble
-    successful_models = [
-        (name, res["model"]) for name, res in results.items() if "model" in res
-    ]
+    # Create and save ensemble model if we have multiple models
+    successful_models = [(name, results[name]["model"]) for name in results if "model" in results[name]]
     if len(successful_models) > 1:
+        print("\nCreating ensemble model...")
         ensemble = VotingClassifier(
-            estimators=successful_models, voting="soft", flatten_transform=True
+            estimators=successful_models,
+            voting="soft"
         )
         ensemble.fit(X_train, y_train)
-        ensemble_filename = os.path.join(MODEL_SAVE_PATH, "ensemble_model.joblib")
-        dump(ensemble, ensemble_filename)
-        print(f"✅ Saved ensemble model to {ensemble_filename}")
-        results["Ensemble"] = {
+        
+        # Save ensemble model
+        ensemble_path = os.path.join(MODEL_SAVE_PATH, "ensemble_model.joblib")
+        dump(ensemble, ensemble_path)
+        print(f"✅ Saved ensemble model to {ensemble_path}")
+        
+        # Evaluate ensemble
+        y_pred = ensemble.predict(X_test)
+        y_proba = ensemble.predict_proba(X_test)[:, 1]
+        
+        results["ensemble"] = {
             "model": ensemble,
-            "accuracy": accuracy_score(y_test, ensemble.predict(X_test)),
+            "accuracy": accuracy_score(y_test, y_pred),
+            "roc_auc": roc_auc_score(y_test, y_proba),
+            "avg_precision": average_precision_score(y_test, y_proba),
+            "report": classification_report(y_test, y_pred, output_dict=True),
+            "confusion_matrix": confusion_matrix(y_test, y_pred)
         }
+        
+        # Plot and save ensemble confusion matrix
+        plot_confusion_matrix(results["ensemble"]["confusion_matrix"], "Ensemble Confusion Matrix")
 
-    # Save overall selected features
-    overall_selected_features_filename = os.path.join(
-        MODEL_SAVE_PATH, "overall_selected_features.joblib"
-    )
-    try:
-        dump(feature_names.tolist(), overall_selected_features_filename)
-        print(
-            f"✅ Saved overall selected feature names to {overall_selected_features_filename}"
-        )
-    except Exception as e:
-        print(f"❌ Failed to save overall selected feature names: {e}")
+    # Save feature names (both overall_selected_features and selected_features)
+    overall_features_path = os.path.join(MODEL_SAVE_PATH, "overall_selected_features.joblib")
+    dump(feature_names.tolist(), overall_features_path)
+    print(f"✅ Saved overall selected features to {overall_features_path}")
+    
+    selected_features_path = os.path.join(MODEL_SAVE_PATH, "selected_features.joblib")
+    dump(feature_names.tolist(), selected_features_path)
+    print(f"✅ Saved selected features to {selected_features_path}")
+
+    # Save training results
+    results_path = os.path.join(MODEL_SAVE_PATH, "training_results.joblib")
+    dump(results, results_path)
+    print(f"✅ Saved training results to {results_path}")
 
     return results
+
+def plot_confusion_matrix(cm, title='Confusion Matrix'):
+    """Plot a confusion matrix with proper formatting"""
+    plt.figure(figsize=(6, 6))
+    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
+               xticklabels=['Not Depressed', 'Depressed'],
+               yticklabels=['Not Depressed', 'Depressed'])
+    plt.title(title)
+    plt.xlabel('Predicted')
+    plt.ylabel('Actual')
+    plt.tight_layout()
+    plt.savefig(f"{title.lower().replace(' ', '_')}_confusion_matrix.png")
+    plt.show()
 
 
 def get_feature_importances(model, feature_names):
