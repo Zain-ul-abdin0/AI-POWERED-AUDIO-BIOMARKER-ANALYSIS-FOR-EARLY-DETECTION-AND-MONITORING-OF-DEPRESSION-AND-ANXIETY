@@ -15,7 +15,7 @@ def load_model_pipeline():
     try:
         # Change this path to load the specific model you want to test:
         # e.g., 'svm_model.joblib', 'random_forest_model.joblib', 'lightgbm_model.joblib', or 'ensemble_model.joblib'
-        model_to_load = 'lightgbm_model.joblib' 
+        model_to_load = 'random_forest_model.joblib' 
         pipeline = joblib.load(os.path.join('./trained_models', model_to_load))
         print(f"✔ Full model pipeline '{model_to_load}' loaded successfully")
         
@@ -214,7 +214,7 @@ if __name__ == "__main__":
     if pipeline is None:
         exit()
     
-    audio_file = "./Dataset/491_AUDIO.wav"
+    audio_file = "./Dataset/300_AUDIO.wav"
     label, confidence = predict_audio(audio_file, pipeline)
     
     print("\n" + "="*50)
