@@ -1,99 +1,185 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>Depression Detection</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Audio Depression Detection</title>
+    <!-- Tailwind CSS CDN for modern styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
     <style>
-        body { font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; }
-        .result { margin-top: 20px; padding: 15px; border-radius: 5px; }
-        .high-risk { background-color: #ffdddd; border-left: 5px solid #f44336; }
-        .medium-risk { background-color: #fff3cd; border-left: 5px solid #ffc107; }
-        .low-risk { background-color: #ddffdd; border-left: 5px solid #4CAF50; }
-        
-        /* Loading spinner styles */
+        /* A simple custom style to match the user's original color scheme */
+        .high-risk { background-color: #fcebeb; border-color: #ef4444; }
+        .medium-risk { background-color: #fffbeb; border-color: #f59e0b; }
+        .low-risk { background-color: #ecfdf5; border-color: #10b981; }
+
+        /* The custom spinner from the original code, but centered with Tailwind classes */
         .spinner {
-            display: none;
             border: 4px solid rgba(0, 0, 0, 0.1);
             border-radius: 50%;
-            border-top: 4px solid #3498db;
-            width: 30px;
-            height: 30px;
+            border-top: 4px solid #3b82f6; /* Tailwind blue-500 */
+            width: 2rem;
+            height: 2rem;
             animation: spin 1s linear infinite;
-            margin: 20px auto;
         }
         @keyframes spin {
             0% { transform: rotate(0deg); }
             100% { transform: rotate(360deg); }
         }
-        
-        /* Disable button during processing */
-        button:disabled {
-            opacity: 0.7;
-            cursor: not-allowed;
-        }
     </style>
 </head>
-<body>
-    <h1>Audio Depression Detection</h1>
-    <form id="uploadForm">
-        <input type="file" name="file" accept=".wav,.mp3" required>
-        <button type="submit" id="submitBtn">Analyze</button>
-    </form>
-    
-    <!-- Loading Spinner -->
-    <div id="spinner" class="spinner"></div>
-    
-    <!-- Results Container -->
-    <div id="result" class="result" style="display:none;">
-        <h3>Result</h3>
-        <p><strong>Status:</strong> <span id="prediction"></span></p>
-        <p><strong>Confidence:</strong> <span id="confidence"></span></p>
-        <p><strong>Risk Level:</strong> <span id="risk"></span></p>
+<body class="bg-gray-100 flex items-center justify-center min-h-screen p-4 font-sans">
+    <div class="max-w-2xl w-full bg-white p-8 rounded-lg shadow-2xl">
+        <h1 class="text-3xl font-bold text-center mb-6 text-gray-800">Audio Depression Detection</h1>
+
+        <form id="uploadForm" class="space-y-6">
+            <!-- Model Selection Dropdown -->
+            <div>
+                <label for="model_name" class="block text-lg font-medium text-gray-700">Select a Model</label>
+                <select id="model_name" name="model_name" class="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm rounded-md shadow-sm">
+                    <option value="ensemble">Ensemble Model</option>
+                    <option value="random_forest">Random Forest</option>
+                    <option value="xgboost">XGBoost</option>
+                    <option value="lightgbm">LightGBM</option>
+                    <option value="svm">SVM</option>
+                </select>
+            </div>
+
+            <!-- File Upload -->
+            <div>
+                <label for="file_upload" class="block text-lg font-medium text-gray-700">Upload an Audio File (.wav, .mp3)</label>
+                <div class="mt-1 flex justify-center px-6 pt-5 pb-6 border-2 border-gray-300 border-dashed rounded-md">
+                    <div class="space-y-1 text-center">
+                        <svg class="mx-auto h-12 w-12 text-gray-400" stroke="currentColor" fill="none" viewBox="0 0 48 48" aria-hidden="true">
+                            <path d="M28 8H12a4 4 0 00-4 4v20m32-12v8m0 0v8a4 4 0 01-4 4H12a4 4 0 01-4-4v-4m32-4l-3.262 3.262-10.428 10.428-11.642-11.642-3.262 3.262" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>
+                        </svg>
+                        <div class="flex text-sm text-gray-600">
+                            <label for="file_upload" class="relative cursor-pointer bg-white rounded-md font-medium text-indigo-600 hover:text-indigo-500 focus-within:outline-none focus-within:ring-2 focus-within:ring-offset-2 focus-within:ring-indigo-500">
+                                <span>Choose a file</span>
+                                <input id="file_upload" name="file" type="file" class="sr-only" accept=".wav,.mp3">
+                            </label>
+                            <p class="pl-1" id="file_name">or drag and drop</p>
+                        </div>
+                        <p class="text-xs text-gray-500">
+                            WAV or MP3 up to 10MB
+                        </p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Submit Button with Spinner -->
+            <button type="submit" id="submitBtn" class="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed">
+                <span id="button-text">Analyze</span>
+                <span id="spinner" class="spinner hidden"></span>
+            </button>
+        </form>
+
+        <!-- Results Display Area -->
+        <div id="result-container" class="mt-8 p-6 rounded-lg shadow-inner hidden border">
+            <h3 class="text-2xl font-bold text-gray-800 mb-4">Analysis Results</h3>
+            <div id="results" class="space-y-4">
+                <p class="text-gray-700"><strong>Prediction:</strong> <span id="prediction" class="font-semibold"></span></p>
+                <p class="text-gray-700"><strong>Confidence:</strong> <span id="confidence" class="font-semibold"></span></p>
+                <p class="text-gray-700"><strong>Risk Level:</strong> <span id="risk" class="font-semibold px-2 py-1 rounded-full text-white"></span></p>
+                <div class="mt-4 border-t pt-4">
+                    <h4 class="text-lg font-semibold text-gray-700">Key Features:</h4>
+                    <ul class="list-disc list-inside mt-2 text-gray-600">
+                        <li><strong>Mean MFCC-0:</strong> <span id="mfcc_0_mean"></span></li>
+                        <li><strong>Jitter:</strong> <span id="jitter"></span></li>
+                        <li><strong>Pause Ratio:</strong> <span id="pause_ratio"></span></li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+
+        <!-- Error Message Container -->
+        <div id="error-container" class="mt-8 p-6 rounded-lg shadow-inner border border-red-500 bg-red-50 hidden">
+            <h3 class="text-2xl font-bold text-red-700 mb-4">Error</h3>
+            <p id="error-message" class="text-red-600"></p>
+        </div>
     </div>
 
     <script>
-        document.getElementById('uploadForm').addEventListener('submit', async (e) => {
-            e.preventDefault();
-            
-            // Show loading spinner and disable button
-            const spinner = document.getElementById('spinner');
+        document.getElementById('uploadForm').addEventListener('submit', async function(event) {
+            event.preventDefault();
+
+            const form = event.target;
             const submitBtn = document.getElementById('submitBtn');
-            spinner.style.display = 'block';
+            const buttonText = document.getElementById('button-text');
+            const spinner = document.getElementById('spinner');
+            const resultContainer = document.getElementById('result-container');
+            const errorContainer = document.getElementById('error-container');
+            const fileInput = document.getElementById('file_upload');
+
+            // Hide previous results and errors
+            resultContainer.classList.add('hidden');
+            errorContainer.classList.add('hidden');
+
+            // Show spinner and disable button
+            buttonText.classList.add('hidden');
+            spinner.classList.remove('hidden');
             submitBtn.disabled = true;
-            
+
+            const formData = new FormData(form);
+
+            if (!fileInput.files[0]) {
+                // Handle case where no file is selected
+                errorContainer.classList.remove('hidden');
+                document.getElementById('error-message').textContent = 'Please select a file to analyze.';
+                buttonText.classList.remove('hidden');
+                spinner.classList.add('hidden');
+                submitBtn.disabled = false;
+                return;
+            }
+
             try {
                 const response = await fetch('/predict', {
                     method: 'POST',
-                    body: new FormData(e.target)
+                    body: formData
                 });
                 
                 const result = await response.json();
                 
-                if (result.error) {
-                    document.getElementById('result').innerHTML = `
-                        <p style="color:red">Error: ${result.error}</p>
-                    `;
-                    return;
+                if (!response.ok) {
+                    throw new Error(result.error || 'Something went wrong.');
                 }
                 
-                // Update results
+                // Update results with data from the server
                 document.getElementById('prediction').textContent = result.prediction;
                 document.getElementById('confidence').textContent = `${result.confidence}%`;
-                document.getElementById('risk').textContent = result.risk_level;
                 
-                // Update risk styling
-                const resultDiv = document.getElementById('result');
-                resultDiv.className = 'result ' + result.risk_level.toLowerCase().replace(' ', '-') + '-risk';
-                resultDiv.style.display = 'block';
+                const riskSpan = document.getElementById('risk');
+                riskSpan.textContent = result.risk_level;
+                riskSpan.className = `font-semibold px-2 py-1 rounded-full text-white ${result.risk_level.toLowerCase()}-risk`;
+
+                // Update key features with null/undefined checks
+                document.getElementById('mfcc_0_mean').textContent = result.features.mfcc_0_mean !== undefined ? result.features.mfcc_0_mean.toFixed(2) : 'N/A';
+                document.getElementById('jitter').textContent = result.features.jitter !== undefined ? result.features.jitter.toFixed(4) : 'N/A';
+                document.getElementById('pause_ratio').textContent = result.features.pause_ratio !== undefined ? result.features.pause_ratio.toFixed(2) : 'N/A';
+
+
+                // Show result container and add correct styling
+                resultContainer.classList.remove('hidden');
                 
             } catch (error) {
-                document.getElementById('result').innerHTML = `
-                    <p style="color:red">Error: ${error.message}</p>
-                `;
-                document.getElementById('result').style.display = 'block';
+                // Display error message to the user
+                errorContainer.classList.remove('hidden');
+                document.getElementById('error-message').textContent = `Error: ${error.message}`;
+
             } finally {
                 // Hide spinner and re-enable button
-                spinner.style.display = 'none';
+                buttonText.classList.remove('hidden');
+                spinner.classList.add('hidden');
                 submitBtn.disabled = false;
+            }
+        });
+
+        // Display the selected file name
+        document.getElementById('file_upload').addEventListener('change', function() {
+            const fileNameSpan = document.getElementById('file_name');
+            if (this.files.length > 0) {
+                fileNameSpan.textContent = this.files[0].name;
+            } else {
+                fileNameSpan.textContent = 'or drag and drop';
             }
         });
     </script>
