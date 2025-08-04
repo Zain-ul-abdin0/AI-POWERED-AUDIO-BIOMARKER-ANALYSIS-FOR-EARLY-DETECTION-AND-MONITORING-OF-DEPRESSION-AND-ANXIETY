@@ -27,7 +27,7 @@ MEDIUM_RISK_THRESHOLD = 0.3
 
 # --- Load Model and Feature Names ---
 # IMPORTANT: These files must exist in a './trained_models' directory.
-MODEL_PATH = './trained_models/ensemble_model.joblib'
+MODEL_PATH = './trained_models/random_forest_model.joblib'
 FEATURE_NAMES_PATH = './trained_models/overall_selected_features.joblib'
 
 try:
