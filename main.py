@@ -175,7 +175,6 @@ def extract_features(file_path, file_id):
         if TRANSCRIPTS_AVAILABLE:
             transcript_path = os.path.join(DATASET_PATH, f"{file_id}_TRANSCRIPT.csv")
             print('Transcripts Available',transcript_path)
-            print('Transcripts Variable Yes/No',TRANSCRIPTS_AVAILABLE)
 
             if os.path.exists(transcript_path):
                 try:
