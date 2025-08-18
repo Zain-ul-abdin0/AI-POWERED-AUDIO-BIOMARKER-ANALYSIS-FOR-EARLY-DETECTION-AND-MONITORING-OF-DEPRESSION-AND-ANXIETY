@@ -6,7 +6,7 @@ import numpy as np
 from textblob import TextBlob
 import matplotlib.pyplot as plt
 import seaborn as sns
-from sklearn.model_selection import train_test_split, cross_val_score, GridSearchCV, RandomizedSearchCV
+from sklearn.model_selection import train_test_split, RandomizedSearchCV
 from sklearn.preprocessing import StandardScaler
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.svm import SVC
@@ -24,10 +24,9 @@ from sklearn.decomposition import PCA
 from sklearn.feature_selection import SelectKBest, f_classif
 from sklearn.calibration import CalibratedClassifierCV
 from sklearn.utils.class_weight import compute_class_weight
-from joblib import dump, load
 import lightgbm as lgb
 import xgboost as xgb
-from sklearn.ensemble import VotingClassifier, StackingClassifier
+from sklearn.ensemble import StackingClassifier
 import joblib
 
 # Suppress warnings
@@ -377,7 +376,7 @@ def train_models(X, y, feature_names):
     results['SVC'] = {'model': svm_calibrated}
     joblib.dump(svm_calibrated, os.path.join(MODEL_SAVE_PATH, 'svm_model.joblib'))
     print(f"✔ SVC model saved to {os.path.join(MODEL_SAVE_PATH, 'svm_model.joblib')}")
-
+    
     # --- Ensemble Model (StackingClassifier) ---
     estimators = [
         ('lgbm', lgbm_gs.best_estimator_),
@@ -432,6 +431,24 @@ def train_models(X, y, feature_names):
                 res['feature_importances'] = feature_importance_df.to_records(index=False).tolist()
             else:
                 print(f"Could not get feature importances for model: {name}")
+    # --- Code to find and print the best model ---
+    best_model_name = ''
+    best_roc_auc = -1
+
+    for name, res in results.items():
+        model = res['model']
+        y_proba = model.predict_proba(X_test)[:, 1]
+        roc_auc = roc_auc_score(y_test, y_proba)
+        
+        if roc_auc > best_roc_auc:
+            best_roc_auc = roc_auc
+            best_model_name = name
+
+    print("\n=========================")
+    print(f"🥇 The most efficient model is: {best_model_name}")
+    print(f"🏆 With a ROC AUC score of: {best_roc_auc:.4f}")
+    print("=========================")
+
 
     return results
 
@@ -440,8 +457,8 @@ def train_models(X, y, feature_names):
 # =======================
 if __name__ == "__main__":
     # Step 1: Process all files and extract features
-    TRANSCRIPTS_AVAILABLE = detect_transcripts()
-    print(f"Transcripts available: {TRANSCRIPTS_AVAILABLE}")
+    # TRANSCRIPTS_AVAILABLE = detect_transcripts()
+    # print(f"Transcripts available: {TRANSCRIPTS_AVAILABLE}")
     print("Processing files and extracting features...")
     features_df = process_all_files()
 
@@ -471,3 +488,4 @@ if __name__ == "__main__":
                     print(f"{feat}: {imp:.4f}")
     else:
         print("No labels found, cannot train models.")
+        
