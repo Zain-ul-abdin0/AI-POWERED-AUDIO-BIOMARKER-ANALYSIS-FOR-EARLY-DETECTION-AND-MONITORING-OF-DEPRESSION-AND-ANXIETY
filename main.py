@@ -487,5 +487,5 @@ if __name__ == "__main__":
                 for feat, imp in res["feature_importances"][:10]:
                     print(f"{feat}: {imp:.4f}")
     else:
-        print("No labels found, cannot train models.")
+        print("No labels found, cannot train models. ")
         
