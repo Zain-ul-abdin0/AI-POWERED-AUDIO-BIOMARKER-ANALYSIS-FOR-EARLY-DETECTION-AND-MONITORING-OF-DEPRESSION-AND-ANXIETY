@@ -29,22 +29,19 @@ import xgboost as xgb
 from sklearn.ensemble import StackingClassifier
 import joblib
 
-# Suppress warnings
+# Reduce unnecessary warnings for cleaner output
 import warnings
 warnings.filterwarnings("ignore")
 
-# ========================
-# 1. CONFIGURATION
-# ========================
-DATASET_PATH = "Dataset"
-OUTPUT_CSV = "all_features.csv"
-MODEL_SAVE_PATH = "trained_models"
-TRANSCRIPTS_AVAILABLE = None
+# 1. SETUP AND CONFIGURATION
+AUDIO_DATA_FOLDER = "Dataset"
+FEATURES_OUTPUT_FILE = "all_features.csv"
+MODELS_SAVE_FOLDER = "trained_models"
+HAS_TRANSCRIPTS = None
 
-# PHQ-8 scores for depression classification (0-24 range)
-# A score of >= 10 is generally considered a strong indicator of depression.
-# '1' will now represent a score >= 10, and '0' will represent a score < 10.
-PHQ8_SCORES = {
+# Depression assessment scores - higher scores indicate more severe symptoms
+# We classify scores of 10 or above as indicating depression
+PATIENT_DEPRESSION_SCORES = {
     "300": 2, "301": 3, "302": 4, "303": 0, "304": 6, "305": 7, "306": 0, "307": 4, "308": 22,
     "310": 4, "311": 21, "313": 7, "316": 6, "318": 3, "319": 13, "320": 11, "321": 20, "325": 10,
     "326": 2, "327": 4, "328": 4, "329": 1, "330": 12, "331": 8, "332": 18, "333": 5, "335": 12,
@@ -60,166 +57,168 @@ PHQ8_SCORES = {
     "405": 17, "410": 12, "453": 17, "461": 17,
 }
 
-# Create directory for saving models
-os.makedirs(MODEL_SAVE_PATH, exist_ok=True)
+# Create folder to store our trained models
+os.makedirs(MODELS_SAVE_FOLDER, exist_ok=True)
 
-# ========================
-# 2. DATA PREPROCESSING
-# ========================
-def process_audio(audio_path, target_sr, duration):
-    """
-    Processes the audio file, including trimming/padding, silence removal,
-    and normalization.
-    """
+# 2. AUDIO PROCESSING FUNCTIONS
+def prepare_audio(audio_file_path, target_sample_rate, clip_duration):
+    """Loads and prepares an audio file for analysis by trimming silence, normalizing volume, and ensuring consistent length."""
     try:
-        audio, sr = librosa.load(audio_path, sr=target_sr, mono=True)
+        # Load audio with specified sample rate
+        audio_data, original_sample_rate = librosa.load(audio_file_path, sr=target_sample_rate, mono=True)
         
-        if len(audio) < target_sr * duration:
-            audio = np.pad(audio, (0, max(0, int(target_sr * duration) - len(audio))), 'constant')
+        # Ensure audio is the right length by padding or trimming
+        if len(audio_data) < target_sample_rate * clip_duration:
+            audio_data = np.pad(audio_data, (0, max(0, int(target_sample_rate * clip_duration) - len(audio_data))), 'constant')
         else:
-            audio = audio[:int(target_sr * duration)]
+            audio_data = audio_data[:int(target_sample_rate * clip_duration)]
             
-        audio, _ = librosa.effects.trim(audio, top_db=25)
+        # Remove silence from beginning and end
+        audio_data, _ = librosa.effects.trim(audio_data, top_db=25)
         
-        if len(audio) < sr * 0.5:
+        # Skip files that are too quiet
+        if len(audio_data) < original_sample_rate * 0.5:
             raise ValueError("Audio too short after trimming.")
             
-        audio = librosa.effects.preemphasis(audio)
-        audio = librosa.util.normalize(audio)
+        # Enhance audio quality and normalize
+        audio_data = librosa.effects.preemphasis(audio_data)
+        audio_data = librosa.util.normalize(audio_data)
         
-        return audio, sr
-    except Exception as e:
-        print(f"Audio processing error for {audio_path}: {e}")
+        return audio_data, original_sample_rate
+    except Exception as error:
+        print(f"Could not process {audio_file_path}: {error}")
         return None, None
 
-def voice_activity_features(audio, sr):
-    """Calculates voice activity detection features."""
-    rms = librosa.feature.rms(y=audio)
-    vad = rms > np.percentile(rms, 30)
+def detect_voice_activity(audio_data, sample_rate):
+    """Measures how much of the audio contains speech versus silence."""
+    volume_levels = librosa.feature.rms(y=audio_data)
+    voice_detected = volume_levels > np.percentile(volume_levels, 30)
     return {
-        'vad_ratio': np.mean(vad),
-        'vad_transitions': np.sum(np.diff(vad.astype(int)) != 0)
+        'speech_ratio': np.mean(voice_detected),
+        'speech_transitions': np.sum(np.diff(voice_detected.astype(int)) != 0)
     }
 
-def calculate_jitter(audio, sr):
-    """Calculates jitter based on pitch changes."""
-    pitches = librosa.yin(audio, fmin=80, fmax=400)
-    valid_pitches = pitches[pitches > 0]
+def measure_vocal_jitter(audio_data, sample_rate):
+    """Calculates the small variations in pitch that occur during speech."""
+    pitch_values = librosa.yin(audio_data, fmin=80, fmax=400)
+    valid_pitches = pitch_values[pitch_values > 0]
     if len(valid_pitches) > 1:
         return np.mean(np.abs(np.diff(valid_pitches))) / np.mean(valid_pitches)
     return 0
-def detect_transcripts():
-    """Check if any transcript files exist in the dataset."""
-    transcript_files = glob.glob(os.path.join(DATASET_PATH, "*_TRANSCRIPT.csv"))
+
+def check_for_transcripts():
+    """Looks for transcript files that might be available."""
+    transcript_files = glob.glob(os.path.join(AUDIO_DATA_FOLDER, "*_TRANSCRIPT.csv"))
     return len(transcript_files) > 0
-def extract_features(file_path, file_id):
-    """Extracts a comprehensive set of audio features from a single file."""
-    features = {}
-    global TRANSCRIPTS_AVAILABLE
+
+def extract_audio_features(audio_file_path, patient_id):
+    """Extracts detailed characteristics from an audio file for analysis."""
+    feature_set = {}
+    global HAS_TRANSCRIPTS
     
     try:
-        audio, sr = process_audio(file_path, target_sr=16000, duration=5)
-        if audio is None:
+        audio_data, sample_rate = prepare_audio(audio_file_path, target_sample_rate=16000, clip_duration=5)
+        if audio_data is None:
             return None
 
-        # --- Acoustic Features ---
-        n_mfcc_to_use = 20
-        mfccs = librosa.feature.mfcc(y=audio, sr=sr, n_mfcc=40)
-        for i in range(n_mfcc_to_use):
-            features[f'mfcc_{i}_mean'] = np.mean(mfccs[i])
-            features[f'mfcc_{i}_std'] = np.std(mfccs[i])
-            features[f'mfcc_{i}_kurtosis'] = pd.Series(mfccs[i]).kurtosis()
+        # --- Sound Quality Features ---
+        mfcc_count = 20
+        mfcc_features = librosa.feature.mfcc(y=audio_data, sr=sample_rate, n_mfcc=40)
+        for i in range(mfcc_count):
+            feature_set[f'mfcc_{i}_mean'] = np.mean(mfcc_features[i])
+            feature_set[f'mfcc_{i}_std'] = np.std(mfcc_features[i])
+            feature_set[f'mfcc_{i}_kurtosis'] = pd.Series(mfcc_features[i]).kurtosis()
 
-        chroma = librosa.feature.chroma_stft(y=audio, sr=sr)
+        chroma_features = librosa.feature.chroma_stft(y=audio_data, sr=sample_rate)
         for i in range(12):
-            features[f'chroma_{i}_mean'] = np.mean(chroma[i])
+            feature_set[f'chroma_{i}_mean'] = np.mean(chroma_features[i])
         
-        spectral_centroid = librosa.feature.spectral_centroid(y=audio, sr=sr)
-        spectral_bandwidth = librosa.feature.spectral_bandwidth(y=audio, sr=sr)
-        spectral_rolloff = librosa.feature.spectral_rolloff(y=audio, sr=sr)
-        spectral_contrast = librosa.feature.spectral_contrast(y=audio, sr=sr)
-        features.update({
-            "spectral_centroid_mean": np.mean(spectral_centroid),
-            "spectral_bandwidth_mean": np.mean(spectral_bandwidth),
+        spectral_center = librosa.feature.spectral_centroid(y=audio_data, sr=sample_rate)
+        frequency_range = librosa.feature.spectral_bandwidth(y=audio_data, sr=sample_rate)
+        spectral_rolloff = librosa.feature.spectral_rolloff(y=audio_data, sr=sample_rate)
+        spectral_contrast = librosa.feature.spectral_contrast(y=audio_data, sr=sample_rate)
+        feature_set.update({
+            "spectral_centroid_mean": np.mean(spectral_center),
+            "spectral_bandwidth_mean": np.mean(frequency_range),
             "spectral_rolloff_mean": np.mean(spectral_rolloff),
             "spectral_contrast_mean": np.mean(spectral_contrast),
         })
 
-        # --- Prosodic Features ---
-        pitches, magnitudes = librosa.piptrack(y=audio, sr=sr)
-        valid_pitches = pitches[pitches > 0]
-        pitch_mean = np.mean(valid_pitches) if len(valid_pitches) > 0 else 0
+        # --- Speech Pattern Features ---
+        pitch_values, strength_values = librosa.piptrack(y=audio_data, sr=sample_rate)
+        valid_pitches = pitch_values[pitch_values > 0]
+        average_pitch = np.mean(valid_pitches) if len(valid_pitches) > 0 else 0
         
-        features.update({
-            "pitch_mean": pitch_mean,
+        feature_set.update({
+            "pitch_mean": average_pitch,
             "pitch_std": np.std(valid_pitches) if len(valid_pitches) > 0 else 0,
-            "harmonic_ratio": np.mean(librosa.effects.harmonic(audio)),
-            "percussive_ratio": np.mean(librosa.effects.percussive(audio)),
+            "harmonic_ratio": np.mean(librosa.effects.harmonic(audio_data)),
+            "percussive_ratio": np.mean(librosa.effects.percussive(audio_data)),
         })
 
-        features.update(voice_activity_features(audio, sr))
-        features['jitter'] = calculate_jitter(audio, sr)
+        feature_set.update(detect_voice_activity(audio_data, sample_rate))
+        feature_set['jitter'] = measure_vocal_jitter(audio_data, sample_rate)
 
-        intervals = librosa.effects.split(audio, top_db=25)
-        speech_duration = sum(end-start for start,end in intervals)/sr
-        total_duration = len(audio)/sr
-        features.update({
-            "pause_ratio": (total_duration - speech_duration) / total_duration if total_duration > 0 else 0,
-            "speaking_rate": len(intervals) / total_duration if total_duration > 0 else 0,
-            "speech_rate_var": np.std([(end-start)/sr for start,end in intervals]) if len(intervals) > 1 else 0,
+        speech_segments = librosa.effects.split(audio_data, top_db=25)
+        speaking_time = sum(end-start for start,end in speech_segments)/sample_rate
+        total_time = len(audio_data)/sample_rate
+        feature_set.update({
+            "pause_ratio": (total_time - speaking_time) / total_time if total_time > 0 else 0,
+            "speaking_rate": len(speech_segments) / total_time if total_time > 0 else 0,
+            "speech_rate_var": np.std([(end-start)/sample_rate for start,end in speech_segments]) if len(speech_segments) > 1 else 0,
         })
 
-        # --- Linguistic features (requires transcripts, which are not provided) ---
-        # For a full implementation, you would need to parse transcripts here.
-        if TRANSCRIPTS_AVAILABLE:
-            transcript_path = os.path.join(DATASET_PATH, f"{file_id}_TRANSCRIPT.csv")
-            print('Transcripts Available',transcript_path)
+        #  Language Analysis (if transcripts are available) 
+        # This section would analyze the content of speech if we have transcripts
+        if HAS_TRANSCRIPTS:
+            transcript_file_path = os.path.join(AUDIO_DATA_FOLDER, f"{patient_id}_TRANSCRIPT.csv")
+            print('Transcripts Available', transcript_file_path)
 
-            if os.path.exists(transcript_path):
+            if os.path.exists(transcript_file_path):
                 try:
-                    transcript = pd.read_csv(transcript_path, sep="\t")
-                    text = " ".join(str(x) for x in transcript["value"].dropna())
-                    blob = TextBlob(text)
-                    features.update({
-                        "sentiment_polarity": blob.sentiment.polarity,
-                        "sentiment_subjectivity": blob.sentiment.subjectivity,
-                        "word_count": len(text.split()),
+                    transcript_data = pd.read_csv(transcript_file_path, sep="\t")
+                    all_text = " ".join(str(x) for x in transcript_data["value"].dropna())
+                    text_analysis = TextBlob(all_text)
+                    feature_set.update({
+                        "sentiment_polarity": text_analysis.sentiment.polarity,
+                        "sentiment_subjectivity": text_analysis.sentiment.subjectivity,
+                        "word_count": len(all_text.split()),
                         "avg_word_length": (
-                            np.mean([len(word) for word in text.split()]) if text else 0
+                            np.mean([len(word) for word in all_text.split()]) if all_text else 0
                         ),
                         "lexical_diversity": (
-                            len(set(text.split())) / len(text.split()) if text else 0
+                            len(set(all_text.split())) / len(all_text.split()) if all_text else 0
                         ),
                         "negative_word_ratio": (
                             sum(
                                 1
-                                for word in text.split()
+                                for word in all_text.split()
                                 if TextBlob(word).sentiment.polarity < -0.1
-                            ) / len(text.split())
-                            if text
+                            ) / len(all_text.split())
+                            if all_text
                             else 0
                         ),
                     })
-                except Exception as e:
-                    print(f"Transcript error for {file_id}: {str(e)}")
-                    # Fill with neutral values if parsing fails
-                    features.update(neutral_linguistic_features())
+                except Exception as error:
+                    print(f"Could not read transcript for {patient_id}: {str(error)}")
+                    # Use neutral values if we can't analyze the text
+                    feature_set.update(get_neutral_language_features())
             else:
-                # No transcript for this participant — fill with neutral values
-                features.update(neutral_linguistic_features())
+                # No transcript available for this person
+                feature_set.update(get_neutral_language_features())
 
-        # Add metadata for labeling
-        features['participant_id'] = file_id
-        features['phq8_score'] = PHQ8_SCORES.get(file_id)
+        # Add identifying information and depression score
+        feature_set['patient_id'] = patient_id
+        feature_set['depression_score'] = PATIENT_DEPRESSION_SCORES.get(patient_id)
         
-        return features
+        return feature_set
         
-    except Exception as e:
-        print(f"Error extracting features from {file_path}: {e}")
+    except Exception as error:
+        print(f"Error analyzing {audio_file_path}: {error}")
         return None
 
-def neutral_linguistic_features():
-    """Return zero/neutral values for linguistic features."""
+def get_neutral_language_features():
+    """Provides default values when text analysis isn't possible."""
     return {
         "sentiment_polarity": 0.0,
         "sentiment_subjectivity": 0.0,
@@ -228,264 +227,248 @@ def neutral_linguistic_features():
         "lexical_diversity": 0.0,
         "negative_word_ratio": 0.0,
     }
-def process_all_files():
-    """Goes through the dataset, extracts features, and stores them in a DataFrame."""
-    feature_list = []
-    file_paths = glob.glob(os.path.join(DATASET_PATH, "**", "*.wav"), recursive=True)
-    
-    for file_path in file_paths:
-        file_id = os.path.basename(file_path).split('_')[0]
-        if file_id in PHQ8_SCORES:
-            features = extract_features(file_path, file_id)
-            if features:
-                feature_list.append(features)
-    
-    features_df = pd.DataFrame(feature_list)
-    features_df.to_csv(OUTPUT_CSV, index=False)
-    return features_df
 
-def visualize_features(df):
-    """
-    Creates visualizations of the extracted features to identify trends.
-    This helps in feature selection and understanding the data.
-    """
-    # Create the binary label for depression based on PHQ-8 score >= 10
-    df['depression_label'] = df['phq8_score'].apply(lambda x: 1 if x >= 10 else 0)
+def process_all_audio_files():
+    """Processes all audio files in the dataset and extracts their features."""
+    all_features = []
+    audio_files = glob.glob(os.path.join(AUDIO_DATA_FOLDER, "**", "*.wav"), recursive=True)
     
-    print("\nVisualizing top 10 features by correlation...")
+    for audio_file in audio_files:
+        patient_id = os.path.basename(audio_file).split('_')[0]
+        if patient_id in PATIENT_DEPRESSION_SCORES:
+            features = extract_audio_features(audio_file, patient_id)
+            if features:
+                all_features.append(features)
     
-    # Calculate correlation matrix
-    correlations = df.corr(numeric_only=True)['depression_label'].sort_values(ascending=False)
-    top_10_correlated_features = correlations.index[1:11] 
+    features_dataframe = pd.DataFrame(all_features)
+    features_dataframe.to_csv(FEATURES_OUTPUT_FILE, index=False)
+    return features_dataframe
+
+def create_feature_visualizations(dataframe):
+    """ Creates charts to help understand how different features relate to depression. This helps us choose which features might be most important."""
+    # Create simple depression label: 1 if depressed, 0 if not
+    dataframe['has_depression'] = dataframe['depression_score'].apply(lambda x: 1 if x >= 10 else 0)    
+    print("\nCreating visualizations for top 10 most relevant features...")
+    # Find which features correlate most with depression
+    correlations = dataframe.corr(numeric_only=True)['has_depression'].sort_values(ascending=False)
+    top_10_features = correlations.index[1:11] 
     
     plt.figure(figsize=(15, 10))
-    for i, feature in enumerate(top_10_correlated_features):
+    for i, feature in enumerate(top_10_features):
         plt.subplot(2, 5, i + 1)
-        sns.boxplot(x='depression_label', y=feature, data=df)
-        plt.title(f'Depression Label vs. {feature}', fontsize=8)
+        sns.boxplot(x='has_depression', y=feature, data=dataframe)
+        plt.title(f'Depression vs. {feature}', fontsize=8)
         plt.xticks([0, 1], ['Not Depressed', 'Depressed'])
     plt.tight_layout()
     plt.show()
 
-def prepare_features(df):
-    """
-    Prepares the feature DataFrame for machine learning, including
-    imputation, scaling, and feature selection.
-    """
-    # Create the binary label
-    df['depression_label'] = df['phq8_score'].apply(lambda x: 1 if x >= 10 else 0)
+def prepare_data_for_training(dataframe):
+    """ Gets the data ready for machine learning by handling missing values, selecting the most useful features, and creating the depression labels."""
+    # Create the simple depression classification
+    dataframe['has_depression'] = dataframe['depression_score'].apply(lambda x: 1 if x >= 10 else 0)
     
-    # Separate features and labels
-    feature_columns = [col for col in df.columns if col not in ['participant_id', 'phq8_score', 'depression_label']]
-    X = df[feature_columns]
-    y = df['depression_label']
+    # Separate features from labels
+    feature_columns = [col for col in dataframe.columns if col not in ['patient_id', 'depression_score', 'has_depression']]
+    features = dataframe[feature_columns]
+    labels = dataframe['has_depression']
     
-    # Impute missing values
-    imputer = SimpleImputer(strategy='mean')
-    X = pd.DataFrame(imputer.fit_transform(X), columns=feature_columns)
+    # Fill in any missing data points
+    missing_value_handler = SimpleImputer(strategy='mean')
+    features = pd.DataFrame(missing_value_handler.fit_transform(features), columns=feature_columns)
     
-    # Select top K best features using ANOVA F-value
-    selector = SelectKBest(f_classif, k=30)
-    X_selected = selector.fit_transform(X, y)
-    selected_mask = selector.get_support()
-    selected_features = X.columns[selected_mask]
+    # Select the 30 most useful features
+    feature_selector = SelectKBest(f_classif, k=30)
+    selected_features = feature_selector.fit_transform(features, labels)
+    selected_mask = feature_selector.get_support()
+    chosen_features = features.columns[selected_mask]
     
-    # Save the list of selected feature names for the API
-    joblib.dump(selected_features.tolist(), os.path.join(MODEL_SAVE_PATH, 'overall_selected_features.joblib'))
+    # Save the list of selected features for later use
+    joblib.dump(chosen_features.tolist(), os.path.join(MODELS_SAVE_FOLDER, 'selected_features.joblib'))
     
-    return X_selected, y, selected_features
+    return selected_features, labels, chosen_features
 
-def plot_confusion_matrix(y_true, y_pred, model_name):
-    """
-    Plots a confusion matrix heatmap for a given model.
-    """
-    cm = confusion_matrix(y_true, y_pred)
-    disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=['Not Depressed', 'Depressed'])
-    disp.plot(cmap=plt.cm.Blues)
+def show_confusion_matrix(true_labels, predicted_labels, model_name):
+    """Creates a visual representation of model performance showing correct and incorrect predictions."""
+    matrix = confusion_matrix(true_labels, predicted_labels)
+    display = ConfusionMatrixDisplay(confusion_matrix=matrix, display_labels=['Not Depressed', 'Depressed'])
+    display.plot(cmap=plt.cm.Blues)
     plt.title(f'Confusion Matrix for {model_name}')
     plt.show()
 
-def train_models(X, y, feature_names):
-    """
-    Trains multiple models, including an improved ensemble, and
-    saves all trained models and their feature importances.
-    """
+def train_machine_learning_models(features, labels, feature_names):
+    """ Trains several different machine learning models to identify depression from audio features and saves the best performing ones """
     results = {}
+    # Split data into training and testing sets
+    X_train, X_test, y_train, y_test = train_test_split(features, labels, test_size=0.2, random_state=42, stratify=labels)
     
-    # Split data for training and testing
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
-    
-    # Calculate class weights for imbalanced data
+    # Adjust for imbalanced data (more non-depressed than depressed)
     class_weights = compute_class_weight(class_weight='balanced', classes=np.unique(y_train), y=y_train)
-    class_weight_dict = {i: weight for i, weight in enumerate(class_weights)}
+    weight_dict = {i: weight for i, weight in enumerate(class_weights)}
 
-    # --- Model Pipelines with Hyperparameter Tuning ---
+    # Train Different Models with Optimized Settings
     
-    # 1. LightGBM Classifier with RandomizedSearchCV
-    lgbm = make_pipeline(StandardScaler(), lgb.LGBMClassifier(random_state=42, class_weight='balanced', verbose=-1))
-    lgbm_param_dist = {
+    # 1 LightGBM Model
+    lightgbm_model = make_pipeline(StandardScaler(), lgb.LGBMClassifier(random_state=42, class_weight='balanced', verbose=-1))
+    lightgbm_params = {
         'lgbmclassifier__n_estimators': [100, 200, 300],
         'lgbmclassifier__learning_rate': [0.01, 0.05, 0.1],
         'lgbmclassifier__num_leaves': [20, 31, 40],
     }
-    lgbm_gs = RandomizedSearchCV(lgbm, lgbm_param_dist, n_iter=10, cv=5, scoring='roc_auc', random_state=42)
-    lgbm_gs.fit(X_train, y_train)
-    results['LightGBM'] = {'model': lgbm_gs.best_estimator_, 'best_params': lgbm_gs.best_params_}
-    joblib.dump(lgbm_gs.best_estimator_, os.path.join(MODEL_SAVE_PATH, 'lightgbm_model.joblib'))
-    print(f"\n✔ LightGBM model saved to {os.path.join(MODEL_SAVE_PATH, 'lightgbm_model.joblib')}")
+    lightgbm_search = RandomizedSearchCV(lightgbm_model, lightgbm_params, n_iter=10, cv=5, scoring='roc_auc', random_state=42)
+    lightgbm_search.fit(X_train, y_train)
+    results['LightGBM'] = {'model': lightgbm_search.best_estimator_, 'best_params': lightgbm_search.best_params_}
+    joblib.dump(lightgbm_search.best_estimator_, os.path.join(MODELS_SAVE_FOLDER, 'lightgbm_model.joblib'))
+    print(f"\n✔ LightGBM model saved to {os.path.join(MODELS_SAVE_FOLDER, 'lightgbm_model.joblib')}")
     
-    # 2. Random Forest Classifier with RandomizedSearchCV
-    rf = make_pipeline(StandardScaler(), RandomForestClassifier(random_state=42, class_weight='balanced'))
-    rf_param_dist = {
+    # 2 Random Forest Model
+    random_forest_model = make_pipeline(StandardScaler(), RandomForestClassifier(random_state=42, class_weight='balanced'))
+    random_forest_params = {
         'randomforestclassifier__n_estimators': [100, 200, 300],
         'randomforestclassifier__max_depth': [None, 10, 20],
         'randomforestclassifier__min_samples_leaf': [1, 2, 4],
     }
-    rf_gs = RandomizedSearchCV(rf, rf_param_dist, n_iter=10, cv=5, scoring='roc_auc', random_state=42)
-    rf_gs.fit(X_train, y_train)
-    results['RandomForest'] = {'model': rf_gs.best_estimator_, 'best_params': rf_gs.best_params_}
-    joblib.dump(rf_gs.best_estimator_, os.path.join(MODEL_SAVE_PATH, 'random_forest_model.joblib'))
-    print(f"✔ RandomForest model saved to {os.path.join(MODEL_SAVE_PATH, 'random_forest_model.joblib')}")
+    random_forest_search = RandomizedSearchCV(random_forest_model, random_forest_params, n_iter=10, cv=5, scoring='roc_auc', random_state=42)
+    random_forest_search.fit(X_train, y_train)
+    results['RandomForest'] = {'model': random_forest_search.best_estimator_, 'best_params': random_forest_search.best_params_}
+    joblib.dump(random_forest_search.best_estimator_, os.path.join(MODELS_SAVE_FOLDER, 'random_forest_model.joblib'))
+    print(f"✔ RandomForest model saved to {os.path.join(MODELS_SAVE_FOLDER, 'random_forest_model.joblib')}")
     
-    # 3. XGBoost Classifier with RandomizedSearchCV
-    xgb_model = make_pipeline(
+    # 3 XGBoost Model
+    xgboost_model = make_pipeline(
         StandardScaler(), 
         xgb.XGBClassifier(
             random_state=42, 
             eval_metric='logloss',
             use_label_encoder=False,
-            scale_pos_weight=class_weight_dict.get(1) / class_weight_dict.get(0) if class_weight_dict.get(0) else 1
+            scale_pos_weight=weight_dict.get(1) / weight_dict.get(0) if weight_dict.get(0) else 1
         )
     )
-    xgb_param_dist = {
+    xgboost_params = {
         'xgbclassifier__n_estimators': [100, 200, 300],
         'xgbclassifier__learning_rate': [0.01, 0.05, 0.1],
         'xgbclassifier__max_depth': [3, 5, 7],
         'xgbclassifier__subsample': [0.8, 1.0],
     }
-    xgb_gs = RandomizedSearchCV(xgb_model, xgb_param_dist, n_iter=10, cv=5, scoring='roc_auc', random_state=42)
-    xgb_gs.fit(X_train, y_train)
-    results['XGBoost'] = {'model': xgb_gs.best_estimator_, 'best_params': xgb_gs.best_params_}
-    joblib.dump(xgb_gs.best_estimator_, os.path.join(MODEL_SAVE_PATH, 'xgboost_model.joblib'))
-    print(f"✔ XGBoost model saved to {os.path.join(MODEL_SAVE_PATH, 'xgboost_model.joblib')}")
+    xgboost_search = RandomizedSearchCV(xgboost_model, xgboost_params, n_iter=10, cv=5, scoring='roc_auc', random_state=42)
+    xgboost_search.fit(X_train, y_train)
+    results['XGBoost'] = {'model': xgboost_search.best_estimator_, 'best_params': xgboost_search.best_params_}
+    joblib.dump(xgboost_search.best_estimator_, os.path.join(MODELS_SAVE_FOLDER, 'xgboost_model.joblib'))
+    print(f"✔ XGBoost model saved to {os.path.join(MODELS_SAVE_FOLDER, 'xgboost_model.joblib')}")
 
-    # 4. Support Vector Machine (SVC) with probability calibration
-    svm = make_pipeline(StandardScaler(), SVC(kernel='linear', probability=True, random_state=42, class_weight='balanced'))
-    svm_calibrated = CalibratedClassifierCV(svm, method='isotonic', cv=5)
-    svm_calibrated.fit(X_train, y_train)
-    results['SVC'] = {'model': svm_calibrated}
-    joblib.dump(svm_calibrated, os.path.join(MODEL_SAVE_PATH, 'svm_model.joblib'))
-    print(f"✔ SVC model saved to {os.path.join(MODEL_SAVE_PATH, 'svm_model.joblib')}")
+    # 4 Support Vector Machine
+    svm_model = make_pipeline(StandardScaler(), SVC(kernel='linear', probability=True, random_state=42, class_weight='balanced'))
+    calibrated_svm = CalibratedClassifierCV(svm_model, method='isotonic', cv=5)
+    calibrated_svm.fit(X_train, y_train)
+    results['SVC'] = {'model': calibrated_svm}
+    joblib.dump(calibrated_svm, os.path.join(MODELS_SAVE_FOLDER, 'svm_model.joblib'))
+    print(f"✔ SVC model saved to {os.path.join(MODELS_SAVE_FOLDER, 'svm_model.joblib')}")
     
-    # --- Ensemble Model (StackingClassifier) ---
-    estimators = [
-        ('lgbm', lgbm_gs.best_estimator_),
-        ('rf', rf_gs.best_estimator_),
-        ('xgb', xgb_gs.best_estimator_),
-        ('svm', svm_calibrated)
+    # Combined Model Using All Individual Models 
+    model_collection = [
+        ('lgbm', lightgbm_search.best_estimator_),
+        ('rf', random_forest_search.best_estimator_),
+        ('xgb', xgboost_search.best_estimator_),
+        ('svm', calibrated_svm)
     ]
-    ensemble = StackingClassifier(estimators=estimators, final_estimator=xgb.XGBClassifier(random_state=42), cv=5)
-    ensemble.fit(X_train, y_train)
-    results['Ensemble'] = {'model': ensemble}
-    joblib.dump(ensemble, os.path.join(MODEL_SAVE_PATH, 'ensemble_model.joblib'))
-    print(f"✔ Ensemble model saved to {os.path.join(MODEL_SAVE_PATH, 'ensemble_model.joblib')}")
+    combined_model = StackingClassifier(estimators=model_collection, final_estimator=xgb.XGBClassifier(random_state=42), cv=5)
+    combined_model.fit(X_train, y_train)
+    results['Ensemble'] = {'model': combined_model}
+    joblib.dump(combined_model, os.path.join(MODELS_SAVE_FOLDER, 'ensemble_model.joblib'))
+    print(f"✔ Ensemble model saved to {os.path.join(MODELS_SAVE_FOLDER, 'ensemble_model.joblib')}")
 
-    print("\nTraining and evaluation complete. Results:")
+    print("\nTraining complete. Evaluating model performance:")
     
-    # Evaluate and visualize all models
-    for name, res in results.items():
-        model = res['model']
-        y_pred = model.predict(X_test)
-        y_proba = model.predict_proba(X_test)[:, 1]
+    # Test and evaluate all models
+    for model_name, model_info in results.items():
+        current_model = model_info['model']
+        predictions = current_model.predict(X_test)
+        prediction_probabilities = current_model.predict_proba(X_test)[:, 1]
         
-        print(f"\n--- {name} Results ---")
-        print(f"Accuracy: {accuracy_score(y_test, y_pred):.4f}")
-        print(f"ROC AUC: {roc_auc_score(y_test, y_proba):.4f}")
-        print(f"Avg Precision: {average_precision_score(y_test, y_proba):.4f}")
-        print(classification_report(y_test, y_pred))
+        print(f"\n--- {model_name} Performance ---")
+        print(f"Accuracy: {accuracy_score(y_test, predictions):.4f}")
+        print(f"ROC AUC: {roc_auc_score(y_test, prediction_probabilities):.4f}")
+        print(f"Avg Precision: {average_precision_score(y_test, prediction_probabilities):.4f}")
+        print(classification_report(y_test, predictions))
         
-        # Plot and show the confusion matrix
-        plot_confusion_matrix(y_test, y_pred, name)
+        # Show performance visualization
+        show_confusion_matrix(y_test, predictions, model_name)
         
-        # Save feature importances for tree-based models
-        if name in ['RandomForest', 'LightGBM', 'XGBoost']:
-            final_model = None
-            if hasattr(model, 'named_steps'):
-                for step_name, step_model in model.named_steps.items():
+        # Save which features were most important for each model
+        if model_name in ['RandomForest', 'LightGBM', 'XGBoost']:
+            trained_model = None
+            if hasattr(current_model, 'named_steps'):
+                for step_name, step_model in current_model.named_steps.items():
                     if hasattr(step_model, 'predict'):
-                        final_model = step_model
+                        trained_model = step_model
                         break
-            else: # For calibrated models like SVM
-                final_model = model
-            
-            if final_model and hasattr(final_model, 'feature_importances_'):
-                importances = final_model.feature_importances_
-                feature_importance_df = pd.DataFrame({'feature': feature_names, 'importance': importances})
-                feature_importance_df = feature_importance_df.sort_values(by='importance', ascending=False)
-                
-                # Save feature importances to a joblib file
-                importance_filename = f'{name.lower()}_feature_importances.joblib'
-                joblib.dump(feature_importance_df.to_records(index=False).tolist(), os.path.join(MODEL_SAVE_PATH, importance_filename))
-                print(f"✔ Feature importances for {name} saved to {importance_filename}")
-                
-                res['feature_importances'] = feature_importance_df.to_records(index=False).tolist()
             else:
-                print(f"Could not get feature importances for model: {name}")
-    # --- Code to find and print the best model ---
-    best_model_name = ''
-    best_roc_auc = -1
+                trained_model = current_model
+            
+            if trained_model and hasattr(trained_model, 'feature_importances_'):
+                importance_scores = trained_model.feature_importances_
+                importance_df = pd.DataFrame({'feature': feature_names, 'importance': importance_scores})
+                importance_df = importance_df.sort_values(by='importance', ascending=False)
+                
+                # Save feature importance rankings
+                importance_file = f'{model_name.lower()}_feature_importances.joblib'
+                joblib.dump(importance_df.to_records(index=False).tolist(), os.path.join(MODELS_SAVE_FOLDER, importance_file))
+                print(f"✔ Feature importance for {model_name} saved to {importance_file}")
+                
+                model_info['feature_importances'] = importance_df.to_records(index=False).tolist()
+            else:
+                print(f"Could not get feature importance for model: {model_name}")
+    
+    # Find and announce the best performing model 
+    best_model = ''
+    best_score = -1
 
-    for name, res in results.items():
-        model = res['model']
-        y_proba = model.predict_proba(X_test)[:, 1]
-        roc_auc = roc_auc_score(y_test, y_proba)
+    for model_name, model_info in results.items():
+        current_model = model_info['model']
+        prediction_probabilities = current_model.predict_proba(X_test)[:, 1]
+        roc_score = roc_auc_score(y_test, prediction_probabilities)
         
-        if roc_auc > best_roc_auc:
-            best_roc_auc = roc_auc
-            best_model_name = name
+        if roc_score > best_score:
+            best_score = roc_score
+            best_model = model_name
 
     print("\n=========================")
-    print(f"🥇 The most efficient model is: {best_model_name}")
-    print(f"🏆 With a ROC AUC score of: {best_roc_auc:.4f}")
+    print(f"🥇 Best performing model: {best_model}")
+    print(f"🏆 ROC AUC score: {best_score:.4f}")
     print("=========================")
-
 
     return results
 
-# ========================
-# 8. MAIN EXECUTION
-# =======================
+# 8 MAIN EXECUTION
 if __name__ == "__main__":
-    # Step 1: Process all files and extract features
-    # TRANSCRIPTS_AVAILABLE = detect_transcripts()
-    # print(f"Transcripts available: {TRANSCRIPTS_AVAILABLE}")
-    print("Processing files and extracting features...")
-    features_df = process_all_files()
+    # Step 1: Process all audio files and extract features
+    # HAS_TRANSCRIPTS = check_for_transcripts()
+    # print(f"Transcripts available: {HAS_TRANSCRIPTS}")
+    print("Processing audio files and extracting features...")
+    features_data = process_all_audio_files()
 
-    # Step 2: Visualize features
-    print("\nVisualizing features...")
-    visualize_features(features_df)
+    # Step 2: Create visualizations to understand the data
+    print("\nCreating feature visualizations...")
+    create_feature_visualizations(features_data)
 
-    # Step 3: Prepare features for ML
-    print("\nPreparing features for machine learning...")
-    X, y, feature_names = prepare_features(features_df)
+    # Step 3: Prepare data for machine learning
+    print("\nPreparing data for machine learning...")
+    X_features, y_labels, selected_feature_names = prepare_data_for_training(features_data)
     
-    # Step 4: Train models (if labels available)
-    if y is not None:
+    # Step 4: Train models if we have labeled data
+    if y_labels is not None:
         print("\nTraining machine learning models...")
-        results = train_models(X, y, feature_names)
+        model_results = train_machine_learning_models(X_features, y_labels, selected_feature_names)
         
-        selected_features = joblib.load("trained_models/overall_selected_features.joblib")
-        print("\nSelected 30 Features:")
-        for i, feat in enumerate(selected_features, 1):
-            print(f"{i}. {feat}")
+        selected_features = joblib.load("trained_models/selected_features.joblib")
+        print("\nTop 30 Selected Features:")
+        for i, feature in enumerate(selected_features, 1):
+            print(f"{i}. {feature}")
 
-        # Print feature importances
-        for name, res in results.items():
-            if res.get("feature_importances"):
-                print(f"\n{name} Top Features:")
-                for feat, imp in res["feature_importances"][:10]:
-                    print(f"{feat}: {imp:.4f}")
+        # Show which features were most important for each model
+        for model_name, model_info in model_results.items():
+            if model_info.get("feature_importances"):
+                print(f"\n{model_name} Most Important Features:")
+                for feature_name, importance_score in model_info["feature_importances"][:10]:
+                    print(f"{feature_name}: {importance_score:.4f}")
     else:
-        print("No labels found, cannot train models. ")
-        
+        print("No depression scores available, cannot train models.")
