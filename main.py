@@ -29,18 +29,14 @@ import xgboost as xgb
 from sklearn.ensemble import StackingClassifier
 import joblib
 
-# Reduce unnecessary warnings for cleaner output
 import warnings
 warnings.filterwarnings("ignore")
 
-# 1. SETUP AND CONFIGURATION
 AUDIO_DATA_FOLDER = "Dataset"
 FEATURES_OUTPUT_FILE = "all_features.csv"
 MODELS_SAVE_FOLDER = "trained_models"
 HAS_TRANSCRIPTS = None
 
-# Depression assessment scores - higher scores indicate more severe symptoms
-# We classify scores of 10 or above as indicating depression
 PATIENT_DEPRESSION_SCORES = {
     "300": 2, "301": 3, "302": 4, "303": 0, "304": 6, "305": 7, "306": 0, "307": 4, "308": 22,
     "310": 4, "311": 21, "313": 7, "316": 6, "318": 3, "319": 13, "320": 11, "321": 20, "325": 10,
@@ -57,30 +53,21 @@ PATIENT_DEPRESSION_SCORES = {
     "405": 17, "410": 12, "453": 17, "461": 17,
 }
 
-# Create folder to store our trained models
 os.makedirs(MODELS_SAVE_FOLDER, exist_ok=True)
-
-# 2. AUDIO PROCESSING FUNCTIONS
 def prepare_audio(audio_file_path, target_sample_rate, clip_duration):
-    """Loads and prepares an audio file for analysis by trimming silence, normalizing volume, and ensuring consistent length."""
     try:
-        # Load audio with specified sample rate
         audio_data, original_sample_rate = librosa.load(audio_file_path, sr=target_sample_rate, mono=True)
         
-        # Ensure audio is the right length by padding or trimming
         if len(audio_data) < target_sample_rate * clip_duration:
             audio_data = np.pad(audio_data, (0, max(0, int(target_sample_rate * clip_duration) - len(audio_data))), 'constant')
         else:
             audio_data = audio_data[:int(target_sample_rate * clip_duration)]
             
-        # Remove silence from beginning and end
         audio_data, _ = librosa.effects.trim(audio_data, top_db=25)
         
-        # Skip files that are too quiet
         if len(audio_data) < original_sample_rate * 0.5:
             raise ValueError("Audio too short after trimming.")
             
-        # Enhance audio quality and normalize
         audio_data = librosa.effects.preemphasis(audio_data)
         audio_data = librosa.util.normalize(audio_data)
         
@@ -90,7 +77,6 @@ def prepare_audio(audio_file_path, target_sample_rate, clip_duration):
         return None, None
 
 def detect_voice_activity(audio_data, sample_rate):
-    """Measures how much of the audio contains speech versus silence."""
     volume_levels = librosa.feature.rms(y=audio_data)
     voice_detected = volume_levels > np.percentile(volume_levels, 30)
     return {
@@ -99,7 +85,6 @@ def detect_voice_activity(audio_data, sample_rate):
     }
 
 def measure_vocal_jitter(audio_data, sample_rate):
-    """Calculates the small variations in pitch that occur during speech."""
     pitch_values = librosa.yin(audio_data, fmin=80, fmax=400)
     valid_pitches = pitch_values[pitch_values > 0]
     if len(valid_pitches) > 1:
@@ -107,12 +92,10 @@ def measure_vocal_jitter(audio_data, sample_rate):
     return 0
 
 def check_for_transcripts():
-    """Looks for transcript files that might be available."""
     transcript_files = glob.glob(os.path.join(AUDIO_DATA_FOLDER, "*_TRANSCRIPT.csv"))
     return len(transcript_files) > 0
 
 def extract_audio_features(audio_file_path, patient_id):
-    """Extracts detailed characteristics from an audio file for analysis."""
     feature_set = {}
     global HAS_TRANSCRIPTS
     
@@ -120,8 +103,6 @@ def extract_audio_features(audio_file_path, patient_id):
         audio_data, sample_rate = prepare_audio(audio_file_path, target_sample_rate=16000, clip_duration=5)
         if audio_data is None:
             return None
-
-        # --- Sound Quality Features ---
         mfcc_count = 20
         mfcc_features = librosa.feature.mfcc(y=audio_data, sr=sample_rate, n_mfcc=40)
         for i in range(mfcc_count):
@@ -144,7 +125,6 @@ def extract_audio_features(audio_file_path, patient_id):
             "spectral_contrast_mean": np.mean(spectral_contrast),
         })
 
-        # --- Speech Pattern Features ---
         pitch_values, strength_values = librosa.piptrack(y=audio_data, sr=sample_rate)
         valid_pitches = pitch_values[pitch_values > 0]
         average_pitch = np.mean(valid_pitches) if len(valid_pitches) > 0 else 0
@@ -168,8 +148,6 @@ def extract_audio_features(audio_file_path, patient_id):
             "speech_rate_var": np.std([(end-start)/sample_rate for start,end in speech_segments]) if len(speech_segments) > 1 else 0,
         })
 
-        #  Language Analysis (if transcripts are available) 
-        # This section would analyze the content of speech if we have transcripts
         if HAS_TRANSCRIPTS:
             transcript_file_path = os.path.join(AUDIO_DATA_FOLDER, f"{patient_id}_TRANSCRIPT.csv")
             print('Transcripts Available', transcript_file_path)
@@ -201,13 +179,10 @@ def extract_audio_features(audio_file_path, patient_id):
                     })
                 except Exception as error:
                     print(f"Could not read transcript for {patient_id}: {str(error)}")
-                    # Use neutral values if we can't analyze the text
                     feature_set.update(get_neutral_language_features())
             else:
-                # No transcript available for this person
                 feature_set.update(get_neutral_language_features())
 
-        # Add identifying information and depression score
         feature_set['patient_id'] = patient_id
         feature_set['depression_score'] = PATIENT_DEPRESSION_SCORES.get(patient_id)
         
@@ -218,7 +193,6 @@ def extract_audio_features(audio_file_path, patient_id):
         return None
 
 def get_neutral_language_features():
-    """Provides default values when text analysis isn't possible."""
     return {
         "sentiment_polarity": 0.0,
         "sentiment_subjectivity": 0.0,
@@ -229,7 +203,6 @@ def get_neutral_language_features():
     }
 
 def process_all_audio_files():
-    """Processes all audio files in the dataset and extracts their features."""
     all_features = []
     audio_files = glob.glob(os.path.join(AUDIO_DATA_FOLDER, "**", "*.wav"), recursive=True)
     
@@ -245,11 +218,8 @@ def process_all_audio_files():
     return features_dataframe
 
 def create_feature_visualizations(dataframe):
-    """ Creates charts to help understand how different features relate to depression. This helps us choose which features might be most important."""
-    # Create simple depression label: 1 if depressed, 0 if not
     dataframe['has_depression'] = dataframe['depression_score'].apply(lambda x: 1 if x >= 10 else 0)    
     print("\nCreating visualizations for top 10 most relevant features...")
-    # Find which features correlate most with depression
     correlations = dataframe.corr(numeric_only=True)['has_depression'].sort_values(ascending=False)
     top_10_features = correlations.index[1:11] 
     
@@ -263,32 +233,25 @@ def create_feature_visualizations(dataframe):
     plt.show()
 
 def prepare_data_for_training(dataframe):
-    """ Gets the data ready for machine learning by handling missing values, selecting the most useful features, and creating the depression labels."""
-    # Create the simple depression classification
     dataframe['has_depression'] = dataframe['depression_score'].apply(lambda x: 1 if x >= 10 else 0)
     
-    # Separate features from labels
     feature_columns = [col for col in dataframe.columns if col not in ['patient_id', 'depression_score', 'has_depression']]
     features = dataframe[feature_columns]
     labels = dataframe['has_depression']
     
-    # Fill in any missing data points
     missing_value_handler = SimpleImputer(strategy='mean')
     features = pd.DataFrame(missing_value_handler.fit_transform(features), columns=feature_columns)
     
-    # Select the 30 most useful features
     feature_selector = SelectKBest(f_classif, k=30)
     selected_features = feature_selector.fit_transform(features, labels)
     selected_mask = feature_selector.get_support()
     chosen_features = features.columns[selected_mask]
     
-    # Save the list of selected features for later use
     joblib.dump(chosen_features.tolist(), os.path.join(MODELS_SAVE_FOLDER, 'selected_features.joblib'))
     
     return selected_features, labels, chosen_features
 
 def show_confusion_matrix(true_labels, predicted_labels, model_name):
-    """Creates a visual representation of model performance showing correct and incorrect predictions."""
     matrix = confusion_matrix(true_labels, predicted_labels)
     display = ConfusionMatrixDisplay(confusion_matrix=matrix, display_labels=['Not Depressed', 'Depressed'])
     display.plot(cmap=plt.cm.Blues)
@@ -296,18 +259,11 @@ def show_confusion_matrix(true_labels, predicted_labels, model_name):
     plt.show()
 
 def train_machine_learning_models(features, labels, feature_names):
-    """ Trains several different machine learning models to identify depression from audio features and saves the best performing ones """
     results = {}
-    # Split data into training and testing sets
     X_train, X_test, y_train, y_test = train_test_split(features, labels, test_size=0.2, random_state=42, stratify=labels)
     
-    # Adjust for imbalanced data (more non-depressed than depressed)
     class_weights = compute_class_weight(class_weight='balanced', classes=np.unique(y_train), y=y_train)
     weight_dict = {i: weight for i, weight in enumerate(class_weights)}
-
-    # Train Different Models with Optimized Settings
-    
-    # 1 LightGBM Model
     lightgbm_model = make_pipeline(StandardScaler(), lgb.LGBMClassifier(random_state=42, class_weight='balanced', verbose=-1))
     lightgbm_params = {
         'lgbmclassifier__n_estimators': [100, 200, 300],
@@ -320,7 +276,6 @@ def train_machine_learning_models(features, labels, feature_names):
     joblib.dump(lightgbm_search.best_estimator_, os.path.join(MODELS_SAVE_FOLDER, 'lightgbm_model.joblib'))
     print(f"\n✔ LightGBM model saved to {os.path.join(MODELS_SAVE_FOLDER, 'lightgbm_model.joblib')}")
     
-    # 2 Random Forest Model
     random_forest_model = make_pipeline(StandardScaler(), RandomForestClassifier(random_state=42, class_weight='balanced'))
     random_forest_params = {
         'randomforestclassifier__n_estimators': [100, 200, 300],
@@ -333,7 +288,6 @@ def train_machine_learning_models(features, labels, feature_names):
     joblib.dump(random_forest_search.best_estimator_, os.path.join(MODELS_SAVE_FOLDER, 'random_forest_model.joblib'))
     print(f"✔ RandomForest model saved to {os.path.join(MODELS_SAVE_FOLDER, 'random_forest_model.joblib')}")
     
-    # 3 XGBoost Model
     xgboost_model = make_pipeline(
         StandardScaler(), 
         xgb.XGBClassifier(
@@ -355,7 +309,6 @@ def train_machine_learning_models(features, labels, feature_names):
     joblib.dump(xgboost_search.best_estimator_, os.path.join(MODELS_SAVE_FOLDER, 'xgboost_model.joblib'))
     print(f"✔ XGBoost model saved to {os.path.join(MODELS_SAVE_FOLDER, 'xgboost_model.joblib')}")
 
-    # 4 Support Vector Machine
     svm_model = make_pipeline(StandardScaler(), SVC(kernel='linear', probability=True, random_state=42, class_weight='balanced'))
     calibrated_svm = CalibratedClassifierCV(svm_model, method='isotonic', cv=5)
     calibrated_svm.fit(X_train, y_train)
@@ -363,7 +316,6 @@ def train_machine_learning_models(features, labels, feature_names):
     joblib.dump(calibrated_svm, os.path.join(MODELS_SAVE_FOLDER, 'svm_model.joblib'))
     print(f"✔ SVC model saved to {os.path.join(MODELS_SAVE_FOLDER, 'svm_model.joblib')}")
     
-    # Combined Model Using All Individual Models 
     model_collection = [
         ('lgbm', lightgbm_search.best_estimator_),
         ('rf', random_forest_search.best_estimator_),
@@ -378,7 +330,6 @@ def train_machine_learning_models(features, labels, feature_names):
 
     print("\nTraining complete. Evaluating model performance:")
     
-    # Test and evaluate all models
     for model_name, model_info in results.items():
         current_model = model_info['model']
         predictions = current_model.predict(X_test)
@@ -390,10 +341,8 @@ def train_machine_learning_models(features, labels, feature_names):
         print(f"Avg Precision: {average_precision_score(y_test, prediction_probabilities):.4f}")
         print(classification_report(y_test, predictions))
         
-        # Show performance visualization
         show_confusion_matrix(y_test, predictions, model_name)
         
-        # Save which features were most important for each model
         if model_name in ['RandomForest', 'LightGBM', 'XGBoost']:
             trained_model = None
             if hasattr(current_model, 'named_steps'):
@@ -418,7 +367,6 @@ def train_machine_learning_models(features, labels, feature_names):
             else:
                 print(f"Could not get feature importance for model: {model_name}")
     
-    # Find and announce the best performing model 
     best_model = ''
     best_score = -1
 
@@ -438,23 +386,16 @@ def train_machine_learning_models(features, labels, feature_names):
 
     return results
 
-# 8 MAIN EXECUTION
 if __name__ == "__main__":
-    # Step 1: Process all audio files and extract features
-    # HAS_TRANSCRIPTS = check_for_transcripts()
-    # print(f"Transcripts available: {HAS_TRANSCRIPTS}")
     print("Processing audio files and extracting features...")
     features_data = process_all_audio_files()
 
-    # Step 2: Create visualizations to understand the data
     print("\nCreating feature visualizations...")
     create_feature_visualizations(features_data)
 
-    # Step 3: Prepare data for machine learning
     print("\nPreparing data for machine learning...")
     X_features, y_labels, selected_feature_names = prepare_data_for_training(features_data)
     
-    # Step 4: Train models if we have labeled data
     if y_labels is not None:
         print("\nTraining machine learning models...")
         model_results = train_machine_learning_models(X_features, y_labels, selected_feature_names)
@@ -464,7 +405,6 @@ if __name__ == "__main__":
         for i, feature in enumerate(selected_features, 1):
             print(f"{i}. {feature}")
 
-        # Show which features were most important for each model
         for model_name, model_info in model_results.items():
             if model_info.get("feature_importances"):
                 print(f"\n{model_name} Most Important Features:")

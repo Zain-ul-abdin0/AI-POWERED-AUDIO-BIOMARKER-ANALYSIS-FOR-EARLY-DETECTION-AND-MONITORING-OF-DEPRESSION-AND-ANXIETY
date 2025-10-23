@@ -1,0 +1,78 @@
+
+--- LightGBM Performance ---
+Accuracy: 0.6818
+ROC AUC: 0.7025
+Avg Precision: 0.7507
+              precision    recall  f1-score   support
+
+           0       0.62      0.91      0.74        11
+           1       0.83      0.45      0.59        11
+
+    accuracy                           0.68        22
+   macro avg       0.73      0.68      0.66        22
+weighted avg       0.73      0.68      0.66        22
+
+✔ Feature importance for LightGBM saved to lightgbm_feature_importances.joblib
+
+--- RandomForest Performance ---
+Accuracy: 0.6364
+ROC AUC: 0.7438
+Avg Precision: 0.7639
+              precision    recall  f1-score   support
+
+           0       0.59      0.91      0.71        11
+           1       0.80      0.36      0.50        11
+
+    accuracy                           0.64        22
+   macro avg       0.69      0.64      0.61        22
+weighted avg       0.69      0.64      0.61        22
+
+✔ Feature importance for RandomForest saved to randomforest_feature_importances.joblib
+
+--- XGBoost Performance ---
+Accuracy: 0.5909
+ROC AUC: 0.6942
+Avg Precision: 0.6648
+              precision    recall  f1-score   support
+
+           0       0.56      0.82      0.67        11
+           1       0.67      0.36      0.47        11
+
+    accuracy                           0.59        22
+   macro avg       0.61      0.59      0.57        22
+weighted avg       0.61      0.59      0.57        22
+
+✔ Feature importance for XGBoost saved to xgboost_feature_importances.joblib
+
+--- SVC Performance ---
+Accuracy: 0.4545
+ROC AUC: 0.5537
+Avg Precision: 0.6684
+              precision    recall  f1-score   support
+
+           0       0.44      0.36      0.40        11
+           1       0.46      0.55      0.50        11
+
+    accuracy                           0.45        22
+   macro avg       0.45      0.45      0.45        22
+weighted avg       0.45      0.45      0.45        22
+
+
+--- Ensemble Performance ---
+Accuracy: 0.5455
+ROC AUC: 0.5620
+Avg Precision: 0.6807
+              precision    recall  f1-score   support
+
+           0       0.55      0.55      0.55        11
+           1       0.55      0.55      0.55        11
+
+    accuracy                           0.55        22
+   macro avg       0.55      0.55      0.55        22
+weighted avg       0.55      0.55      0.55        22
+
+
+=========================
+🥇 Best performing model: RandomForest
+🏆 ROC AUC score: 0.7438
+=========================
