@@ -145,7 +145,7 @@ def extract_features(audio_path, feature_names):
         'vad_ratio': np.mean(vad),
         'vad_transitions': np.sum(np.diff(vad.astype(int)) != 0)
     })
-    
+    print(vad)
     # 7. Jitter Calculation
     pitches_yin = librosa.yin(audio, fmin=80, fmax=400)
     valid_pitches_yin = pitches_yin[pitches_yin > 0]

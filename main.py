@@ -77,8 +77,12 @@ def prepare_audio(audio_file_path, target_sample_rate, clip_duration):
         return None, None
 
 def detect_voice_activity(audio_data, sample_rate):
+    vad_info = detect_voice_activity(audio_data, sample_rate)
     volume_levels = librosa.feature.rms(y=audio_data)
     voice_detected = volume_levels > np.percentile(volume_levels, 30)
+    print(f"Patient  | VAD → "
+      f"Speech Ratio: {vad_info['speech_ratio']:.2f}, "
+      f"Speech Transitions: {vad_info['speech_transitions']}")
     return {
         'speech_ratio': np.mean(voice_detected),
         'speech_transitions': np.sum(np.diff(voice_detected.astype(int)) != 0)
